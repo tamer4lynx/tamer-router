@@ -1,0 +1,9 @@
+{
+  "platforms": {
+    "android": {
+      "packageName": "com.nanofuxion.tamerrouter",
+      "moduleClassName": "com.nanofuxion.tamerrouter.TamerRouterNativeModule",
+      "sourceDir": "android"
+    }
+  }
+}
