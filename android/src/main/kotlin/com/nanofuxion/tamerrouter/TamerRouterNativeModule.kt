@@ -3,6 +3,7 @@ package com.nanofuxion.tamerrouter
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import org.json.JSONObject
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -13,8 +14,10 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import com.lynx.jsbridge.LynxMethod
 import com.lynx.jsbridge.LynxModule
+import com.lynx.react.bridge.Callback
 import com.lynx.react.bridge.JavaOnlyArray
 import com.lynx.react.bridge.JavaOnlyMap
+import com.lynx.tasm.LynxView
 import com.lynx.tasm.behavior.LynxContext
 
 class TamerRouterNativeModule(context: Context) : LynxModule(context) {
@@ -33,6 +36,24 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
 
         @Volatile
         private var hostView: View? = null
+
+        @Volatile
+        private var transitionEnabled: Boolean = true
+
+        @Volatile
+        private var slideFromRight: Boolean = true
+
+        @Volatile
+        private var scrollMode: Boolean = false
+
+        @Volatile
+        private var overrideFromRight: Boolean? = null
+
+        @Volatile
+        private var overrideScrollMode: Boolean? = null
+
+        @Volatile
+        private var historyStateJson: String = """{"entries":["/"],"index":0}"""
 
         fun attachHostView(view: View?) {
             hostView = view
@@ -56,13 +77,42 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    @LynxMethod
+    fun setTransitionConfig(enabled: Boolean?, direction: String?, mode: String?) {
+        if (enabled != null) Companion.transitionEnabled = enabled
+        if (direction != null) Companion.slideFromRight = direction != "left"
+        if (mode != null) Companion.scrollMode = mode == "scroll"
+    }
+
+    @LynxMethod
+    fun setTransitionOptions(optionsJson: String?) {
+        applyOptionsOverride(optionsJson)
+    }
+
+    @LynxMethod
+    fun setHistoryState(stateJson: String?) {
+        if (!stateJson.isNullOrBlank()) {
+            Companion.historyStateJson = stateJson
+        }
+    }
+
+    @LynxMethod
+    fun consumeHistoryState(callback: com.lynx.react.bridge.Callback) {
+        callback.invoke(Companion.historyStateJson)
+    }
+
     private fun sendBackEvent(callback: (Boolean) -> Unit) {
-        val lynxContext = mContext as? LynxContext
+        val lynxContext = getLynxContext()
         if (lynxContext == null) {
             callback(false)
             return
         }
         pendingBackCallback = callback
+        if (!Companion.transitionEnabled) {
+            emitBack()
+            scheduleBackTimeout()
+            return
+        }
         val view = hostView ?: run {
             emitBack()
             scheduleBackTimeout()
@@ -114,8 +164,32 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
         }
     }
 
+    private fun applyOptionsOverride(optionsJson: String?) {
+        if (optionsJson.isNullOrBlank()) return
+        overrideFromRight = null
+        overrideScrollMode = null
+        try {
+            val json = JSONObject(optionsJson)
+            if (json.has("direction")) overrideFromRight = json.getString("direction") != "left"
+            if (json.has("mode")) overrideScrollMode = json.getString("mode") == "scroll"
+        } catch (_: Exception) {}
+    }
+
+    private fun consumeOverride(): Pair<Boolean, Boolean> {
+        val fromRight = overrideFromRight ?: Companion.slideFromRight
+        val scrollMode = overrideScrollMode ?: Companion.scrollMode
+        overrideFromRight = null
+        overrideScrollMode = null
+        return Pair(fromRight, scrollMode)
+    }
+
     @LynxMethod
-    fun preparePop() {
+    fun preparePop(optionsJson: String? = null) {
+        applyOptionsOverride(optionsJson)
+        if (!Companion.transitionEnabled) {
+            emitBack()
+            return
+        }
         val view = hostView ?: return
         view.post {
             val bitmap = captureView(view) ?: run {
@@ -131,14 +205,21 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
                 setImageBitmap(bitmap)
                 layoutParams = FrameLayout.LayoutParams(view.width, view.height)
             }
-            parent.addView(overlay, parent.indexOfChild(view))
+            val index = parent.indexOfChild(view)
+            val scrollMode = overrideScrollMode ?: Companion.scrollMode
+            parent.addView(overlay, if (scrollMode) index + 1 else index)
             snapshotOverlay = overlay
             emitBack()
         }
     }
 
     @LynxMethod
-    fun preparePush(route: String) {
+    fun preparePush(route: String, optionsJson: String? = null) {
+        applyOptionsOverride(optionsJson)
+        if (!Companion.transitionEnabled) {
+            emitNavigate(route)
+            return
+        }
         val view = hostView ?: return
         view.post {
             val bitmap = captureView(view) ?: run {
@@ -155,17 +236,137 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
                 layoutParams = FrameLayout.LayoutParams(view.width, view.height)
             }
             val index = parent.indexOfChild(view)
-            parent.addView(overlay, index)
+            val scrollMode = overrideScrollMode ?: Companion.scrollMode
+            parent.addView(overlay, if (scrollMode) index + 1 else index)
             snapshotOverlay = overlay
             emitNavigate(route)
         }
     }
 
     @LynxMethod
-    fun prepareReplace(route: String) {
+    fun prepareReplace(route: String, optionsJson: String? = null) {
+        applyOptionsOverride(optionsJson)
+        if (!Companion.transitionEnabled) {
+            emitReplace(route)
+            return
+        }
         val view = hostView ?: return
         view.post {
+            val bitmap = captureView(view) ?: run {
+                emitReplace(route)
+                return@post
+            }
+            val parent = view.parent as? ViewGroup ?: run {
+                bitmap.recycle()
+                emitReplace(route)
+                return@post
+            }
+            val overlay = ImageView(view.context).apply {
+                setImageBitmap(bitmap)
+                layoutParams = FrameLayout.LayoutParams(view.width, view.height)
+            }
+            val index = parent.indexOfChild(view)
+            val scrollMode = overrideScrollMode ?: Companion.scrollMode
+            parent.addView(overlay, if (scrollMode) index + 1 else index)
+            snapshotOverlay = overlay
             emitReplace(route)
+        }
+    }
+
+    @LynxMethod
+    fun requestPush(route: String, optionsJson: String?, callback: Callback) {
+        applyOptionsOverride(optionsJson)
+        if (!Companion.transitionEnabled) {
+            mainHandler.post { callback.invoke() }
+            return
+        }
+        val view = hostView ?: run {
+            mainHandler.post { callback.invoke() }
+            return
+        }
+        view.post {
+            val bitmap = captureView(view) ?: run {
+                mainHandler.post { callback.invoke() }
+                return@post
+            }
+            val parent = view.parent as? ViewGroup ?: run {
+                bitmap.recycle()
+                mainHandler.post { callback.invoke() }
+                return@post
+            }
+            val overlay = ImageView(view.context).apply {
+                setImageBitmap(bitmap)
+                layoutParams = FrameLayout.LayoutParams(view.width, view.height)
+            }
+            val index = parent.indexOfChild(view)
+            val scrollMode = overrideScrollMode ?: Companion.scrollMode
+            parent.addView(overlay, if (scrollMode) index + 1 else index)
+            snapshotOverlay = overlay
+            mainHandler.post { callback.invoke() }
+        }
+    }
+
+    @LynxMethod
+    fun requestReplace(route: String, optionsJson: String?, callback: Callback) {
+        applyOptionsOverride(optionsJson)
+        if (!Companion.transitionEnabled) {
+            mainHandler.post { callback.invoke() }
+            return
+        }
+        val view = hostView ?: run {
+            mainHandler.post { callback.invoke() }
+            return
+        }
+        view.post {
+            val bitmap = captureView(view) ?: run {
+                mainHandler.post { callback.invoke() }
+                return@post
+            }
+            val parent = view.parent as? ViewGroup ?: run {
+                bitmap.recycle()
+                mainHandler.post { callback.invoke() }
+                return@post
+            }
+            val overlay = ImageView(view.context).apply {
+                setImageBitmap(bitmap)
+                layoutParams = FrameLayout.LayoutParams(view.width, view.height)
+            }
+            val index = parent.indexOfChild(view)
+            val scrollMode = overrideScrollMode ?: Companion.scrollMode
+            parent.addView(overlay, if (scrollMode) index + 1 else index)
+            snapshotOverlay = overlay
+            mainHandler.post { callback.invoke() }
+        }
+    }
+
+    @LynxMethod
+    fun requestPop(optionsJson: String?, callback: Callback) {
+        applyOptionsOverride(optionsJson)
+        if (!Companion.transitionEnabled) {
+            mainHandler.post { callback.invoke() }
+            return
+        }
+        val view = hostView ?: run {
+            mainHandler.post { callback.invoke() }
+            return
+        }
+        view.post {
+            val bitmap = captureView(view) ?: run {
+                mainHandler.post { callback.invoke() }
+                return@post
+            }
+            val parent = view.parent as? ViewGroup ?: run {
+                bitmap.recycle()
+                mainHandler.post { callback.invoke() }
+                return@post
+            }
+            val overlay = ImageView(view.context).apply {
+                setImageBitmap(bitmap)
+                layoutParams = FrameLayout.LayoutParams(view.width, view.height)
+            }
+            parent.addView(overlay, parent.indexOfChild(view))
+            snapshotOverlay = overlay
+            mainHandler.post { callback.invoke() }
         }
     }
 
@@ -184,13 +385,18 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
         }
     }
 
+    private fun getLynxContext(): LynxContext? {
+        val view = hostView ?: return null
+        return (view as? LynxView)?.lynxContext
+    }
+
     private fun emitNavigate(route: String) {
-        val lynxContext = mContext as? LynxContext ?: return
+        val lynxContext = getLynxContext() ?: return
         emitAction(lynxContext, route, "push")
     }
 
     private fun emitReplace(route: String) {
-        val lynxContext = mContext as? LynxContext ?: return
+        val lynxContext = getLynxContext() ?: return
         emitAction(lynxContext, route, "replace")
     }
 
@@ -202,7 +408,7 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
     }
 
     private fun emitBack() {
-        val lynxContext = mContext as? LynxContext ?: return
+        val lynxContext = getLynxContext() ?: return
         val params = JavaOnlyArray()
         params.pushMap(JavaOnlyMap().apply { putString("payload", "{}") })
         lynxContext.sendGlobalEvent(BACK_EVENT, params)
@@ -212,9 +418,14 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
     fun push() {
         val overlay = snapshotOverlay
         snapshotOverlay = null
+        val (fromRight, scrollMode) = consumeOverride()
         mainHandler.post {
-            if (overlay != null) animatePushWithOverlay(overlay)
-            else animateHostView(fromRight = true)
+            if (!Companion.transitionEnabled) {
+                (overlay?.parent as? ViewGroup)?.removeView(overlay)
+                return@post
+            }
+            if (overlay != null) animatePushWithOverlay(overlay, fromRight, scrollMode)
+            else animateHostView(fromRight = fromRight)
         }
     }
 
@@ -222,41 +433,73 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
     fun pop() {
         val overlay = snapshotOverlay
         snapshotOverlay = null
+        val (fromRight, scrollMode) = consumeOverride()
         mainHandler.post {
-            if (overlay != null) animatePopWithOverlay(overlay)
-            else animateHostView(fromRight = false)
+            if (!Companion.transitionEnabled) {
+                (overlay?.parent as? ViewGroup)?.removeView(overlay)
+                return@post
+            }
+            if (overlay != null) animatePopWithOverlay(overlay, fromRight, scrollMode)
+            else animateHostView(fromRight = !fromRight)
         }
     }
 
     @LynxMethod
     fun replace() {
+        val overlay = snapshotOverlay
         snapshotOverlay = null
+        val (fromRight, scrollMode) = consumeOverride()
         mainHandler.post {
-            animateHostView(fromRight = true)
+            if (!Companion.transitionEnabled) {
+                (overlay?.parent as? ViewGroup)?.removeView(overlay)
+                return@post
+            }
+            if (overlay != null) animatePushWithOverlay(overlay, fromRight, scrollMode)
+            else animateHostView(fromRight = fromRight)
         }
     }
 
-    private fun animatePushWithOverlay(overlay: ImageView) {
+    private fun animatePushWithOverlay(overlay: ImageView, fromRight: Boolean, scrollMode: Boolean) {
         val view = hostView ?: return
         val width = view.width.takeIf { it > 0 } ?: 120
-        view.translationX = width.toFloat()
+        val distance = width.toFloat()
+        val startX = if (fromRight) distance else -distance
+        view.translationX = startX
         view.alpha = 1f
+        if (scrollMode) {
+            val overlayEndX = if (fromRight) -distance else distance
+            overlay.animate()
+                .translationX(overlayEndX)
+                .setDuration(220L)
+                .setInterpolator(AccelerateDecelerateInterpolator())
+                .start()
+        }
         view.animate()
             .translationX(0f)
             .setDuration(220L)
             .setInterpolator(AccelerateDecelerateInterpolator())
-            .withEndAction { (overlay.parent as? ViewGroup)?.removeView(overlay) }
+            .withEndAction { mainHandler.post { (overlay.parent as? ViewGroup)?.removeView(overlay) } }
             .start()
     }
 
-    private fun animatePopWithOverlay(overlay: ImageView) {
+    private fun animatePopWithOverlay(overlay: ImageView, fromRight: Boolean, scrollMode: Boolean) {
         val view = hostView ?: return
         val width = view.width.takeIf { it > 0 } ?: 120
+        val distance = width.toFloat()
+        val overlayEndX = if (fromRight) distance else -distance
+        val viewStartX = if (fromRight) -distance else distance
+        view.translationX = viewStartX
+        view.alpha = 1f
         overlay.animate()
-            .translationX(width.toFloat())
+            .translationX(overlayEndX)
             .setDuration(220L)
             .setInterpolator(AccelerateDecelerateInterpolator())
-            .withEndAction { (overlay.parent as? ViewGroup)?.removeView(overlay) }
+            .withEndAction { mainHandler.post { (overlay.parent as? ViewGroup)?.removeView(overlay) } }
+            .start()
+        view.animate()
+            .translationX(0f)
+            .setDuration(220L)
+            .setInterpolator(AccelerateDecelerateInterpolator())
             .start()
     }
 

@@ -4,20 +4,48 @@ import { createMemoryRouter, RouterProvider, useLocation, Outlet, type RouteObje
 export interface FileRouterProps {
   routes: RouteObject[]
   basename?: string
+  transitionConfig?: TransitionConfig
 }
 
 declare const lynx: { getJSModule?(id: string): { addListener?(e: string, fn: (ev: { payload?: string }) => void): void; removeListener?(e: string, fn: unknown): void } } | undefined
+export type TransitionDirection = 'left' | 'right'
+
+export type TransitionMode = 'stack' | 'scroll'
+
+export interface TransitionConfig {
+  enabled?: boolean
+  direction?: TransitionDirection
+  mode?: TransitionMode
+}
+
+export interface TransitionOptions {
+  mode?: TransitionMode
+  direction?: TransitionDirection
+}
+
 declare const NativeModules: {
   TamerRouterNativeModule?: {
     didHandleBack(consumed: boolean): void
     push(): void
     pop(): void
     replace(): void
-    preparePush(route: string): void
-    prepareReplace(route: string): void
-    preparePop(): void
+    preparePush(route: string, optionsJson?: string): void
+    prepareReplace(route: string, optionsJson?: string): void
+    preparePop(optionsJson?: string): void
+    requestPush(route: string, optionsJson: string | undefined, callback: () => void): void
+    requestReplace(route: string, optionsJson: string | undefined, callback: () => void): void
+    requestPop(optionsJson: string | undefined, callback: () => void): void
+    setTransitionOptions(optionsJson?: string): void
+    setTransitionConfig(enabled?: boolean, direction?: string, mode?: string): void
+    setHistoryState(stateJson: string): void
+    consumeHistoryState(callback: (stateJson?: string) => void): void
   }
 } | undefined
+
+function stringifyOptions(options?: TransitionOptions): string | undefined {
+  if (!options || (options.mode == null && options.direction == null)) return undefined
+  return JSON.stringify(options)
+}
 
 type NavigationAction = 'push' | 'replace' | 'back'
 
@@ -26,12 +54,18 @@ interface NavigationEntry {
   path: string
 }
 
+interface PersistedHistoryState {
+  entries: string[]
+  index: number
+}
+
 interface NavigationController {
   push(route: string): void
   replace(route: string): void
   back(): void
   canGoBack(): boolean
   consumePendingAction(): NavigationAction | null
+  getHistoryState(): { entries: NavigationEntry[]; index: number }
 }
 
 function getLocationPath(state: ReturnType<typeof createMemoryRouter>['state']): string {
@@ -43,10 +77,29 @@ function createKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-function useNavigationController(router: ReturnType<typeof createMemoryRouter>): NavigationController {
+function readPersistedHistoryState(): PersistedHistoryState | null {
+  let restored: PersistedHistoryState | null = null
+  NativeModules?.TamerRouterNativeModule?.consumeHistoryState?.((stateJson?: string) => {
+    if (typeof stateJson !== 'string' || stateJson.length === 0) return
+    try {
+      const parsed = JSON.parse(stateJson) as Partial<PersistedHistoryState>
+      if (!Array.isArray(parsed.entries) || parsed.entries.length === 0) return
+      const entries = parsed.entries.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+      if (entries.length === 0) return
+      const rawIndex = typeof parsed.index === 'number' ? parsed.index : entries.length - 1
+      restored = {
+        entries,
+        index: Math.max(0, Math.min(entries.length - 1, rawIndex)),
+      }
+    } catch (_) {}
+  })
+  return restored
+}
+
+function useNavigationController(router: ReturnType<typeof createMemoryRouter>, initialHistoryState: PersistedHistoryState | null): NavigationController {
   const stateRef = React.useRef<{ entries: NavigationEntry[]; index: number; pendingAction: NavigationAction | null }>({
-    entries: [{ key: createKey(), path: getLocationPath(router.state) }],
-    index: 0,
+    entries: (initialHistoryState?.entries ?? [getLocationPath(router.state)]).map((path) => ({ key: createKey(), path })),
+    index: initialHistoryState?.index ?? 0,
     pendingAction: null,
   })
 
@@ -85,6 +138,10 @@ function useNavigationController(router: ReturnType<typeof createMemoryRouter>):
     stateRef.current.pendingAction = null
     return action
   }, [])
+  const getHistoryState = React.useCallback(() => ({
+    entries: stateRef.current.entries.slice(),
+    index: stateRef.current.index,
+  }), [])
 
   React.useEffect(() => {
     const unsubscribe = router.subscribe((nextState) => {
@@ -107,7 +164,7 @@ function useNavigationController(router: ReturnType<typeof createMemoryRouter>):
     return unsubscribe
   }, [router])
 
-  return React.useMemo(() => ({ push, replace, back, canGoBack, consumePendingAction }), [back, canGoBack, push, replace, consumePendingAction])
+  return React.useMemo(() => ({ push, replace, back, canGoBack, consumePendingAction, getHistoryState }), [back, canGoBack, push, replace, consumePendingAction, getHistoryState])
 }
 
 function useNativeBack(controller: NavigationController) {
@@ -164,9 +221,19 @@ function NavigationAnimator() {
 
 const NavigationContext = React.createContext<NavigationController | null>(null)
 
-export function FileRouter({ routes, basename = '/' }: FileRouterProps): JSX.Element {
+export function FileRouter({ routes, basename = '/', transitionConfig }: FileRouterProps): JSX.Element {
   if (!Array.isArray(routes) || routes.length === 0) {
     throw new Error('tamer-router: routes must be a non-empty array.')
+  }
+  React.useEffect(() => {
+    const mod = NativeModules?.TamerRouterNativeModule
+    if (mod?.setTransitionConfig && transitionConfig != null) {
+      mod.setTransitionConfig(transitionConfig.enabled, transitionConfig.direction, transitionConfig.mode)
+    }
+  }, [transitionConfig])
+  const initialHistoryStateRef = React.useRef<PersistedHistoryState | null>(null)
+  if (initialHistoryStateRef.current == null) {
+    initialHistoryStateRef.current = readPersistedHistoryState()
   }
   const routerRef = React.useRef<ReturnType<typeof createMemoryRouter> | null>(null)
   if (!routerRef.current) {
@@ -177,10 +244,30 @@ export function FileRouter({ routes, basename = '/' }: FileRouterProps): JSX.Ele
         children: routes,
       },
     ]
-    routerRef.current = createMemoryRouter(wrappedRoutes, { basename })
+    const initialHistoryState = initialHistoryStateRef.current
+    routerRef.current = createMemoryRouter(wrappedRoutes, {
+      basename,
+      initialEntries: initialHistoryState?.entries,
+      initialIndex: initialHistoryState?.index,
+    })
   }
   const router = routerRef.current
-  const controller = useNavigationController(router)
+  const controller = useNavigationController(router, initialHistoryStateRef.current)
+  React.useEffect(() => {
+    const unsubscribe = router.subscribe((nextState) => {
+      const historyState = controller.getHistoryState()
+      NativeModules?.TamerRouterNativeModule?.setHistoryState?.(JSON.stringify({
+        entries: historyState.entries.map((entry) => entry.path),
+        index: historyState.index,
+      }))
+    })
+    const historyState = controller.getHistoryState()
+    NativeModules?.TamerRouterNativeModule?.setHistoryState?.(JSON.stringify({
+      entries: historyState.entries.map((entry) => entry.path),
+      index: historyState.index,
+    }))
+    return unsubscribe
+  }, [controller, router])
   useNativeBack(controller)
   useNativeNavigate(controller)
   return React.createElement(
@@ -192,17 +279,28 @@ export function FileRouter({ routes, basename = '/' }: FileRouterProps): JSX.Ele
 
 export function useTamerNavigate() {
   const controller = React.useContext(NavigationContext)
-  const push = React.useCallback((route: string) => {
-    NativeModules?.TamerRouterNativeModule?.preparePush?.(route)
-    if (!NativeModules?.TamerRouterNativeModule?.preparePush) controller?.push(route)
+  const push = React.useCallback((route: string, options?: TransitionOptions) => {
+    const mod = NativeModules?.TamerRouterNativeModule
+    const opts = stringifyOptions(options)
+    const doPush = () => controller?.push(route)
+    if (mod?.requestPush) mod.requestPush(route, opts, doPush)
+    else doPush()
   }, [controller])
-  const replace = React.useCallback((route: string) => {
-    NativeModules?.TamerRouterNativeModule?.prepareReplace?.(route)
-    if (!NativeModules?.TamerRouterNativeModule?.prepareReplace) controller?.replace(route)
+  const replace = React.useCallback((route: string, options?: TransitionOptions) => {
+    const mod = NativeModules?.TamerRouterNativeModule
+    const opts = stringifyOptions(options)
+    const doReplace = () => controller?.replace(route)
+    if (mod?.setTransitionOptions && opts != null) mod.setTransitionOptions(opts)
+    if (mod?.requestReplace) mod.requestReplace(route, opts, doReplace)
+    else doReplace()
   }, [controller])
-  const back = React.useCallback(() => {
-    NativeModules?.TamerRouterNativeModule?.preparePop?.()
-    if (!NativeModules?.TamerRouterNativeModule?.preparePop) controller?.back()
+  const back = React.useCallback((options?: TransitionOptions) => {
+    const mod = NativeModules?.TamerRouterNativeModule
+    const opts = stringifyOptions(options)
+    const doBack = () => controller?.back()
+    if (mod?.requestPop) mod.requestPop(opts, doBack)
+    else if (mod?.preparePop) mod.preparePop(opts)
+    else doBack()
   }, [controller])
   const canGoBack = React.useCallback(() => controller?.canGoBack() ?? false, [controller])
   return { push, replace, back, pop: back, canGoBack }
