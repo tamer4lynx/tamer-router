@@ -11,6 +11,11 @@
       "import": "./dist/src/index.js",
       "default": "./dist/src/index.js"
     },
+    "./layouts": {
+      "types": "./dist/src/layouts.d.ts",
+      "import": "./dist/src/layouts.js",
+      "default": "./dist/src/layouts.js"
+    },
     "./plugin": {
       "types": "./dist/src/plugin.d.ts",
       "import": "./dist/src/plugin.js",
@@ -22,10 +27,10 @@
       "default": "./dist/tamer.config.js"
     }
   },
-  "files": ["dist", "android", "lynx.ext.json"],
+  "files": ["dist", "android", "ios", "lynx.ext.json"],
   "lynx": { "ext": "lynx.ext.json" },
   "scripts": {
-    "build": "tsc"
+    "build": "tsc && cp src/tamer-router.css dist/src/tamer-router.css"
   },
   "peerDependencies": {
     "react": "^17.0.0",
@@ -33,7 +38,8 @@
   },
   "dependencies": {
     "@rsbuild/core": "^1.3.0",
-    "chokidar": "^4.0.0"
+    "chokidar": "^4.0.0",
+    "tamer-app-shell": "file:../tamer-app-shell"
   },
   "devDependencies": {
     "@types/react": "^17.0.0",

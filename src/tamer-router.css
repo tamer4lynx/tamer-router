@@ -1,0 +1,11 @@
+@keyframes TamerTabFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.TamerTabContent {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  animation: TamerTabFadeIn 180ms ease-out;
+}

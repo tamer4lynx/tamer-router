@@ -1,5 +1,6 @@
 import React from 'react'
 import { createMemoryRouter, RouterProvider, useLocation, Outlet, type RouteObject } from 'react-router'
+import { AppShellRouterContext, type AppShellRouterContextValue } from 'tamer-app-shell'
 
 export interface FileRouterProps {
   routes: RouteObject[]
@@ -47,7 +48,7 @@ function stringifyOptions(options?: TransitionOptions): string | undefined {
   return JSON.stringify(options)
 }
 
-type NavigationAction = 'push' | 'replace' | 'back'
+type NavigationAction = 'push' | 'replace' | 'back' | 'tab'
 
 interface NavigationEntry {
   key: string
@@ -62,6 +63,7 @@ interface PersistedHistoryState {
 interface NavigationController {
   push(route: string): void
   replace(route: string): void
+  tabReplace(route: string): void
   back(): void
   canGoBack(): boolean
   consumePendingAction(): NavigationAction | null
@@ -122,6 +124,14 @@ function useNavigationController(router: ReturnType<typeof createMemoryRouter>, 
     router.navigate(route, { replace: true })
   }, [router])
 
+  const tabReplace = React.useCallback((route: string) => {
+    const state = stateRef.current
+    state.entries = state.entries.slice()
+    state.entries[state.index] = { key: createKey(), path: route }
+    state.pendingAction = 'tab'
+    router.navigate(route, { replace: true })
+  }, [router])
+
   const back = React.useCallback(() => {
     const state = stateRef.current
     if (state.index <= 0) return
@@ -164,7 +174,7 @@ function useNavigationController(router: ReturnType<typeof createMemoryRouter>, 
     return unsubscribe
   }, [router])
 
-  return React.useMemo(() => ({ push, replace, back, canGoBack, consumePendingAction, getHistoryState }), [back, canGoBack, push, replace, consumePendingAction, getHistoryState])
+  return React.useMemo(() => ({ push, replace, tabReplace, back, canGoBack, consumePendingAction, getHistoryState }), [back, canGoBack, push, replace, tabReplace, consumePendingAction, getHistoryState])
 }
 
 function useNativeBack(controller: NavigationController) {
@@ -212,6 +222,7 @@ function NavigationAnimator() {
       if (action === 'push') NativeModules?.TamerRouterNativeModule?.push?.()
       else if (action === 'back') NativeModules?.TamerRouterNativeModule?.pop?.()
       else if (action === 'replace') NativeModules?.TamerRouterNativeModule?.replace?.()
+      // 'tab' → no native animation, handled by CSS in Tabs
     }
     setTimeout(run, 0)
   }, [location.pathname, location.key, controller])
@@ -270,10 +281,41 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
   }, [controller, router])
   useNativeBack(controller)
   useNativeNavigate(controller)
+
+  const appShellRouterValue = React.useMemo<AppShellRouterContextValue>(
+    () => ({
+      back: () => {
+        const mod = NativeModules?.TamerRouterNativeModule
+        const doBack = () => controller.back()
+        if (mod?.requestPop) mod.requestPop(undefined, doBack)
+        else if (mod?.preparePop) mod.preparePop(undefined)
+        else doBack()
+      },
+      canGoBack: () => controller.canGoBack(),
+      replace: (route: string, options?: { mode?: string; direction?: string; tab?: boolean }) => {
+        if (options?.tab) {
+          controller.tabReplace(route)
+          return
+        }
+        const mod = NativeModules?.TamerRouterNativeModule
+        const opts = options ? JSON.stringify({ mode: options.mode, direction: options.direction }) : undefined
+        const doReplace = () => controller.replace(route)
+        if (mod?.setTransitionOptions && opts != null) mod.setTransitionOptions(opts)
+        if (mod?.requestReplace) mod.requestReplace(route, opts, doReplace)
+        else doReplace()
+      },
+    }),
+    [controller]
+  )
+
   return React.createElement(
     NavigationContext.Provider,
     { value: controller },
-    React.createElement(RouterProvider, { router }),
+    React.createElement(
+      AppShellRouterContext.Provider as React.Provider<AppShellRouterContextValue>,
+      { value: appShellRouterValue },
+      React.createElement(RouterProvider, { router }),
+    ),
   )
 }
 

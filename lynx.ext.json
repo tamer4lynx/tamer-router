@@ -3,7 +3,16 @@
     "android": {
       "packageName": "com.nanofuxion.tamerrouter",
       "moduleClassName": "com.nanofuxion.tamerrouter.TamerRouterNativeModule",
-      "sourceDir": "android"
+      "sourceDir": "android",
+      "activityPatches": {
+        "onViewAttached": "com.nanofuxion.tamerrouter.TamerRouterNativeModule.attachHostView(lynxView)",
+        "onViewDetached": "com.nanofuxion.tamerrouter.TamerRouterNativeModule.attachHostView(null)",
+        "onBackPressed": "com.nanofuxion.tamerrouter.TamerRouterNativeModule.requestBack"
+      }
+    },
+    "ios": {
+      "moduleClassName": "TamerRouterNativeModule",
+      "podspecPath": "ios/tamerrouter"
     }
   }
 }
