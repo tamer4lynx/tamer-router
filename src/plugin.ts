@@ -123,7 +123,7 @@ export default routes;
 `
 }
 
-export const GENERATED_ROUTES_IMPORT = 'tamer-router/generated-routes'
+export const GENERATED_ROUTES_IMPORT = '@tamer4lynx/tamer-router/generated-routes'
 
 export function tamerRouterPlugin({
   root,
@@ -139,6 +139,7 @@ export function tamerRouterPlugin({
         config.resolve = config.resolve || {}
         config.resolve.alias = {
           ...config.resolve.alias,
+          [GENERATED_ROUTES_IMPORT]: resolvedOutput,
           [GENERATED_ROUTES_IMPORT + '$']: resolvedOutput,
         }
         return config

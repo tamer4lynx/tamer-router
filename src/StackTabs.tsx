@@ -10,7 +10,7 @@ import {
   TabBar,
   type TabBarIconColor,
   type TabItem,
-} from 'tamer-app-shell'
+} from '@tamer4lynx/tamer-app-shell'
 
 type StyleProp = Record<string, unknown>
 

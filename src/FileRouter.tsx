@@ -1,6 +1,6 @@
 import React from 'react'
 import { createMemoryRouter, RouterProvider, useLocation, Outlet, type RouteObject } from 'react-router'
-import { AppShellRouterContext, type AppShellRouterContextValue } from 'tamer-app-shell'
+import { AppShellRouterContext, type AppShellRouterContextValue } from '@tamer4lynx/tamer-app-shell'
 
 export interface FileRouterProps {
   routes: RouteObject[]

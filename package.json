@@ -1,6 +1,7 @@
 {
-  "name": "tamer-router",
-  "version": "0.1.0",
+  "name": "@tamer4lynx/tamer-router",
+  "version": "0.0.1",
+  "publishConfig": { "access": "public", "tag": "prerelease" },
   "type": "module",
   "description": "File-based routing for Lynx (React 17 + react-router 6). Rsbuild plugin + MemoryRouter.",
   "main": "dist/src/index.js",
@@ -27,8 +28,16 @@
       "default": "./dist/tamer.config.js"
     }
   },
-  "files": ["dist", "android", "ios", "lynx.ext.json"],
-  "lynx": { "ext": "lynx.ext.json" },
+  "files": [
+    "dist",
+    "android/src",
+    "android/build.gradle.kts",
+    "ios",
+    "lynx.ext.json"
+  ],
+  "lynx": {
+    "ext": "lynx.ext.json"
+  },
   "scripts": {
     "build": "tsc && cp src/tamer-router.css dist/src/tamer-router.css"
   },
@@ -39,7 +48,7 @@
   "dependencies": {
     "@rsbuild/core": "^1.3.0",
     "chokidar": "^4.0.0",
-    "tamer-app-shell": "file:../tamer-app-shell"
+    "@tamer4lynx/tamer-app-shell": "^0.0.1"
   },
   "devDependencies": {
     "@types/react": "^17.0.0",
@@ -49,6 +58,14 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tamer4lynx/tamer-router.git"
+  },
+  "homepage": "https://github.com/tamer4lynx/tamer-router#readme",
+  "bugs": {
+    "url": "https://github.com/tamer4lynx/tamer-router/issues"
   },
   "author": "Nanofuxion",
   "license": "MIT"

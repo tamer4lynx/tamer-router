@@ -11,7 +11,7 @@ File-based routing for Lynx with **React 17** and **react-router 6**. Rsbuild pl
 ## Install
 
 ```bash
-npm install tamer-router react-router@6 tamer-app-shell
+npm install @tamer4lynx/tamer-router react-router@6 @tamer4lynx/tamer-app-shell
 ```
 
 Stack and Tabs layouts require **tamer-app-shell**. Add to your app and run `t4l link`.
@@ -38,7 +38,7 @@ export default defineConfig({
 Or add **tamerRouterPlugin** directly:
 
 ```ts
-import { tamerRouterPlugin } from 'tamer-router'
+import { tamerRouterPlugin } from '@tamer4lynx/tamer-router'
 
 tamerRouterPlugin({
   root: './src/pages',
@@ -71,8 +71,8 @@ Use `Tabs` in `_layout.tsx` for AppBar + TabBar. The layout wraps all pages:
 
 ```tsx
 // src/pages/_layout.tsx
-import { Tabs } from 'tamer-router'
-import { useSystemUI } from 'tamer-system-ui'
+import { Tabs } from '@tamer4lynx/tamer-router'
+import { useSystemUI } from '@tamer4lynx/tamer-system-ui'
 
 export default function Layout() {
   const { setStatusBar, setNavigationBar } = useSystemUI()
@@ -135,7 +135,7 @@ export function Home() {
 Or use `useTamerNavigate` for `push`, `replace`, `back`, `tabReplace`:
 
 ```tsx
-import { useTamerNavigate } from 'tamer-router'
+import { useTamerNavigate } from '@tamer4lynx/tamer-router'
 
 const { push, replace, back, tabReplace } = useTamerNavigate()
 ```
