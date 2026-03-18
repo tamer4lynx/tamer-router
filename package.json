@@ -48,7 +48,7 @@
   "dependencies": {
     "@rsbuild/core": "^1.3.0",
     "chokidar": "^4.0.0",
-    "@tamer4lynx/tamer-app-shell": "^0.0.1"
+    "@tamer4lynx/tamer-app-shell": "^0.0.2"
   },
   "devDependencies": {
     "@types/react": "^17.0.0",
