@@ -50,7 +50,7 @@ StackScreen.displayName = 'Stack.Screen'
 export interface StackProps {
   children?: React.ReactNode
   titleForPath?: (pathname: string) => string
-  screenOptions?: { headerStyle?: StyleProp; headerShown?: boolean }
+  screenOptions?: { headerStyle?: StyleProp; headerForegroundColor?: string; headerShown?: boolean }
 }
 
 function getScreenOptionsFromChildren(children: React.ReactNode, pathname: string): ScreenOptions | null {
@@ -89,7 +89,7 @@ function StackOptionsProvider({
 
   return (
     <ScreenOptionsContext.Provider value={value}>
-      {showAppBar ? <AppBar title={title} style={screenOptions?.headerStyle as object} /> : null}
+      {showAppBar ? <AppBar title={title} style={screenOptions?.headerStyle as object} foregroundColor={screenOptions?.headerForegroundColor} /> : null}
       {children}
     </ScreenOptionsContext.Provider>
   )
@@ -145,6 +145,7 @@ export interface TabsProps {
   titleForPath?: (pathname: string) => string
   screenOptions?: {
     headerStyle?: StyleProp
+    headerForegroundColor?: string
     headerShown?: boolean
     tabBarStyle?: StyleProp
     contentStyle?: StyleProp
@@ -193,7 +194,7 @@ function TabsOptionsProvider({
 
   return (
     <ScreenOptionsContext.Provider value={value}>
-      {showAppBar ? <AppBar title={title} style={screenOptions?.headerStyle as object} /> : null}
+      {showAppBar ? <AppBar title={title} style={screenOptions?.headerStyle as object} foregroundColor={screenOptions?.headerForegroundColor} /> : null}
       {children}
       <TabBar tabs={tabs} style={screenOptions?.tabBarStyle as object} iconColor={screenOptions?.iconColor} />
     </ScreenOptionsContext.Provider>

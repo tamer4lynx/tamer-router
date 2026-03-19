@@ -1,6 +1,6 @@
 {
   "name": "@tamer4lynx/tamer-router",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publishConfig": { "access": "public", "tag": "prerelease" },
   "type": "module",
   "description": "File-based routing for Lynx (React 17 + react-router 6). Rsbuild plugin + MemoryRouter.",
