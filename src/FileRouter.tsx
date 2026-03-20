@@ -234,7 +234,7 @@ const NavigationContext = React.createContext<NavigationController | null>(null)
 
 export function FileRouter({ routes, basename = '/', transitionConfig }: FileRouterProps): JSX.Element {
   if (!Array.isArray(routes) || routes.length === 0) {
-    throw new Error('tamer-router: routes must be a non-empty array.')
+    throw new Error('tamer-router: routes must be a non-empty array. Ensure pluginTamer() is configured and src/pages contains route files.')
   }
   React.useEffect(() => {
     const mod = NativeModules?.TamerRouterNativeModule

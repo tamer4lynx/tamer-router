@@ -134,7 +134,8 @@ export function tamerRouterPlugin({
   return {
     name: 'tamer-router-plugin',
     async setup(api) {
-      const resolvedOutput = path.resolve(process.cwd(), output)
+      const projectRoot = (api.context as { rootPath?: string }).rootPath ?? process.cwd()
+      const resolvedOutput = path.resolve(projectRoot, output)
       api.modifyRsbuildConfig((config) => {
         config.resolve = config.resolve || {}
         config.resolve.alias = {
@@ -146,7 +147,7 @@ export function tamerRouterPlugin({
       })
 
       api.onBeforeCreateCompiler(async () => {
-        const resolvedRoot = path.resolve(process.cwd(), root)
+        const resolvedRoot = path.resolve(projectRoot, root)
 
         function generate() {
           const outputDir = path.dirname(resolvedOutput)
