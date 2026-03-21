@@ -179,7 +179,8 @@ const { push, replace, back, tabReplace } = useTamerNavigate()
 
 | Export | Description |
 |--------|-------------|
-| `Outlet`, `Slot` | From react-router; render child route content |
+| `Outlet`, `Slot` | Re-exported from react-router; render child route content |
+| `useLocation`, `useNavigate`, `useOutlet`, `useParams` | Re-exported from react-router (import from `@tamer4lynx/tamer-router` so you do not need a direct `react-router` dependency for these hooks) |
 | `./layouts` | Subpath: `Stack`, `Tabs`, `StackScreen`, `TabsScreen`, `useScreenOptions` |
 
 ### FileRouter transition options
