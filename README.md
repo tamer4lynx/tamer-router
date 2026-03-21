@@ -6,7 +6,7 @@ File-based routing for Lynx with **React 17** and **react-router 6**. Rsbuild pl
 - Conventions: `index` → index route, `[param]` → dynamic segment, `_layout.tsx` → layout wrapper
 - **Stack** and **Tabs** layouts with AppBar, TabBar, Content (via tamer-app-shell)
 - `useTamerRouter()` / `useTamerNavigate()` for stack-aware navigation (`push`, `replace`, `back`, `tabReplace`, `canGoBack`)
-- Android back button handled by the router (native module in this package)
+- **System back:** native **`TamerRouterNativeModule`** emits **`tamer-router:back`** on **`GlobalEventEmitter`**. **`FileRouter`** runs **`useBackHandler` / `usePreventBack`** callbacks first (stacked; most recent wins); if none return `true`, the router pops when **`canGoBack()`**. JS notifies native via **`didHandleBack(consumed)`** for transitions (e.g. Android snapshot overlay).
 
 ## Install
 
@@ -15,6 +15,25 @@ npm install @tamer4lynx/tamer-router react-router@6 @tamer4lynx/tamer-app-shell
 ```
 
 Stack and Tabs layouts require **tamer-app-shell**. Add to your app and run `t4l link`.
+
+### Intercepting back (`useBackHandler` / `usePreventBack`)
+
+You **do not** need **Stack**, **Tabs**, or **`useTamerNavigate`** / file-based routing to use these hooks—only a root **`FileRouter`** (even a single route). Without **`FileRouter`**, the hooks are inert; subscribe to **`tamer-router:back`** on **`GlobalEventEmitter`** and call **`didHandleBack`** yourself if you are not using **`FileRouter`**.
+
+```tsx
+import { useBackHandler, usePreventBack } from '@tamer4lynx/tamer-router'
+
+// Return true to consume the back event (e.g. close a modal instead of popping)
+useBackHandler(() => {
+  if (modalOpen) {
+    setModalOpen(false)
+    return true
+  }
+  return false
+}, modalOpen)
+
+usePreventBack(unsavedChanges)
+```
 
 ## Setup
 
