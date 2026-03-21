@@ -177,21 +177,23 @@ function useNavigationController(router: ReturnType<typeof createMemoryRouter>, 
   return React.useMemo(() => ({ push, replace, tabReplace, back, canGoBack, consumePendingAction, getHistoryState }), [back, canGoBack, push, replace, tabReplace, consumePendingAction, getHistoryState])
 }
 
-function useNativeBack(controller: NavigationController) {
+function useNativeBack(controller: NavigationController, backHandlers: BackHandlerRegistry) {
   React.useEffect(() => {
     const bridge = typeof lynx !== 'undefined' ? lynx?.getJSModule?.('GlobalEventEmitter') : undefined
     if (!bridge?.addListener) return
     const handler = () => {
-      const canGoBack = controller.canGoBack()
-      if (typeof console !== 'undefined' && console.debug) {
-        console.debug('[tamer-router] back: canGoBack=', canGoBack)
+      // Give screen-level handlers first refusal.
+      if (backHandlers.invoke()) {
+        NativeModules?.TamerRouterNativeModule?.didHandleBack?.(true)
+        return
       }
+      const canGoBack = controller.canGoBack()
       if (canGoBack) controller.back()
       NativeModules?.TamerRouterNativeModule?.didHandleBack?.(canGoBack)
     }
     bridge.addListener('tamer-router:back', handler)
     return () => { bridge.removeListener?.('tamer-router:back', handler) }
-  }, [controller])
+  }, [controller, backHandlers])
 }
 
 function useNativeNavigate(controller: NavigationController) {
@@ -232,6 +234,39 @@ function NavigationAnimator() {
 
 const NavigationContext = React.createContext<NavigationController | null>(null)
 
+// --- Back handler interception ---
+// A stack of registered handlers (most-recently-added wins).
+// Each handler returns true if it consumed the event, false to let the router handle it normally.
+
+type BackHandler = () => boolean
+
+interface BackHandlerRegistry {
+  add(handler: BackHandler): () => void
+  invoke(): boolean
+}
+
+function createBackHandlerRegistry(): BackHandlerRegistry {
+  const stack: BackHandler[] = []
+  return {
+    add(handler) {
+      stack.push(handler)
+      return () => {
+        const idx = stack.lastIndexOf(handler)
+        if (idx !== -1) stack.splice(idx, 1)
+      }
+    },
+    invoke() {
+      // Walk from newest to oldest; first one that returns true wins.
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i]()) return true
+      }
+      return false
+    },
+  }
+}
+
+const BackHandlerContext = React.createContext<BackHandlerRegistry | null>(null)
+
 export function FileRouter({ routes, basename = '/', transitionConfig }: FileRouterProps): JSX.Element {
   if (!Array.isArray(routes) || routes.length === 0) {
     throw new Error('tamer-router: routes must be a non-empty array. Ensure pluginTamer() is configured and src/pages contains route files.')
@@ -264,6 +299,7 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
   }
   const router = routerRef.current
   const controller = useNavigationController(router, initialHistoryStateRef.current)
+  const backHandlerRegistry = React.useMemo(() => createBackHandlerRegistry(), [])
   React.useEffect(() => {
     const unsubscribe = router.subscribe((nextState) => {
       const historyState = controller.getHistoryState()
@@ -279,7 +315,7 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
     }))
     return unsubscribe
   }, [controller, router])
-  useNativeBack(controller)
+  useNativeBack(controller, backHandlerRegistry)
   useNativeNavigate(controller)
 
   const appShellRouterValue = React.useMemo<AppShellRouterContextValue>(
@@ -312,9 +348,13 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
     NavigationContext.Provider,
     { value: controller },
     React.createElement(
-      AppShellRouterContext.Provider as React.Provider<AppShellRouterContextValue>,
-      { value: appShellRouterValue },
-      React.createElement(RouterProvider, { router }),
+      BackHandlerContext.Provider,
+      { value: backHandlerRegistry },
+      React.createElement(
+        AppShellRouterContext.Provider as React.Provider<AppShellRouterContextValue>,
+        { value: appShellRouterValue },
+        React.createElement(RouterProvider, { router }),
+      ),
     ),
   )
 }
@@ -350,4 +390,41 @@ export function useTamerNavigate() {
 
 export function useTamerRouter() {
   return useTamerNavigate()
+}
+
+/**
+ * Register a callback that intercepts the hardware/system back event before the router handles it.
+ *
+ * Return `true` from the callback to mark the event as consumed (router will not go back).
+ * Return `false` to let normal back navigation proceed.
+ *
+ * The most recently registered enabled handler wins; handlers are stacked and removed on unmount.
+ *
+ * @example
+ * // Block back while a modal is open
+ * useBackHandler(() => {
+ *   if (modalOpen) { setModalOpen(false); return true }
+ *   return false
+ * }, modalOpen)
+ */
+export function useBackHandler(handler: () => boolean, enabled = true): void {
+  'background only'
+  const registry = React.useContext(BackHandlerContext)
+  const handlerRef = React.useRef(handler)
+  handlerRef.current = handler
+
+  React.useEffect(() => {
+    if (!enabled || !registry) return
+    return registry.add(() => handlerRef.current())
+  }, [enabled, registry])
+}
+
+/**
+ * Convenience hook that prevents the hardware back button from navigating away
+ * while `enabled` is true. Useful for blocking navigation during unsaved-changes
+ * confirmations, multi-step forms, or open modals.
+ */
+export function usePreventBack(enabled = true): void {
+  'background only'
+  useBackHandler(() => enabled, enabled)
 }
