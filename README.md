@@ -18,10 +18,22 @@ Stack and Tabs layouts require **tamer-app-shell**. Add to your app and run `t4l
 
 ### Intercepting back (`useBackHandler` / `usePreventBack`)
 
-You **do not** need **Stack**, **Tabs**, or **`useTamerNavigate`** / file-based routing to use these hooks—only a root **`FileRouter`** (even a single route). Without **`FileRouter`**, the hooks are inert; subscribe to **`tamer-router:back`** on **`GlobalEventEmitter`** and call **`didHandleBack`** yourself if you are not using **`FileRouter`**.
+You **do not** need **Stack**, **Tabs**, or **`useTamerNavigate`** / file-based routing to use these hooks.
+
+- **With file-based routing:** wrap the app with **`FileRouter`** (even a single route). Unhandled back pops the JS stack when **`canGoBack()`**.
+- **Without `FileRouter`:** wrap the app with **`BackHandlerRoot`** so the same hooks get a back-handler context. Unhandled back calls **`didHandleBack(false)`** (host may finish the Activity / default behavior).
+
+Without **`FileRouter`** or **`BackHandlerRoot`**, the hooks are inert; subscribe to **`tamer-router:back`** on **`GlobalEventEmitter`** and call **`didHandleBack`** yourself.
 
 ```tsx
-import { useBackHandler, usePreventBack } from '@tamer4lynx/tamer-router'
+import { BackHandlerRoot, useBackHandler, usePreventBack } from '@tamer4lynx/tamer-router'
+
+// Minimal app without react-router FileRouter — still needs tamer-router native (lynx.ext.json)
+root.render(
+  <BackHandlerRoot>
+    <MyScreen />
+  </BackHandlerRoot>,
+)
 
 // Return true to consume the back event (e.g. close a modal instead of popping)
 useBackHandler(() => {
@@ -61,11 +73,11 @@ import { tamerRouterPlugin } from '@tamer4lynx/tamer-router'
 
 tamerRouterPlugin({
   root: './src/pages',
-  output: './src/generated/_generated_routes.tsx',
-  srcAlias: '@/',
   layoutFilename: '_layout.tsx',
 })
 ```
+
+Optional `output` overrides where the route module is written (default: `node_modules/.tamer-router/_generated_routes.tsx` under the app root).
 
 ### 2. Entry point
 
@@ -179,6 +191,7 @@ const { push, replace, back, tabReplace } = useTamerNavigate()
 | `<Tabs children screenOptions? titleForPath? />` | Tabs layout with AppBar + TabBar |
 | `<Tabs.Screen name path options? />` | Tab declarator: `options` includes `title`, `icon`, `label`, `set` |
 | `<FileRouter routes basename? transitionConfig? />` | Renders `createMemoryRouter` + `RouterProvider` |
+| `<BackHandlerRoot />` | Wraps children with back-handler context only (use with `useBackHandler` / `usePreventBack` when **not** using `FileRouter`). Do **not** nest with `FileRouter` — use one root. |
 
 ### Hooks
 
@@ -187,12 +200,14 @@ const { push, replace, back, tabReplace } = useTamerNavigate()
 | `useTamerRouter()` | `{ push, replace, back, pop, tabReplace, canGoBack }` | Stack-aware navigation |
 | `useTamerNavigate()` | `{ push, replace, back, tabReplace }` | Navigation actions |
 | `useScreenOptions(options)` | `void` | Set per-screen header/title options |
+| `useBackHandler(handler, enabled?)` | `void` | Intercept system back; return `true` to consume |
+| `usePreventBack(enabled?)` | `void` | Consume all back events while `enabled` |
 
 ### Plugin
 
 | API | Description |
 |-----|-------------|
-| `tamerRouterPlugin(options)` | Rsbuild plugin. Options: `root`, `output`, `srcAlias?`, `layoutFilename?` |
+| `tamerRouterPlugin(options)` | Rsbuild plugin. Options: `root`, `output?` (default: `node_modules/.tamer-router/_generated_routes.tsx`), `srcAlias?`, `layoutFilename?` |
 
 ### Other exports
 

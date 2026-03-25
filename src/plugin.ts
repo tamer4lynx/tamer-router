@@ -5,9 +5,18 @@ import chokidar from 'chokidar'
 
 export interface TamerRouterPluginOptions {
   root: string
-  output: string
+  /** Defaults to `node_modules/.tamer-router/_generated_routes.tsx` under the Rsbuild project root. */
+  output?: string
   srcAlias?: string
   layoutFilename?: string
+}
+
+/** Relative to the Rsbuild project root (`api.context.rootPath`). */
+export const DEFAULT_TAMER_ROUTER_OUTPUT = 'node_modules/.tamer-router/_generated_routes.tsx'
+
+function resolveOutputPath(output: string | undefined): string {
+  const trimmed = output?.trim()
+  return trimmed ? trimmed : DEFAULT_TAMER_ROUTER_OUTPUT
 }
 
 interface RouteDefinition {
@@ -86,7 +95,8 @@ function buildRouteDefinitions(
 function formatImportPath(filePath: string, outputDir: string): string {
   const rel = path.relative(outputDir, filePath).replace(/\\/g, '/').replace(/\.(tsx|ts|jsx|js)$/, '')
   const base = rel.startsWith('.') ? rel : './' + rel
-  return base + '.js'
+  // `.js` for TypeScript `node16`/`nodenext` resolution; bundlers resolve `.js` to `.tsx`/`.ts` sources.
+  return `${base}.js`
 }
 
 function generateRouteFile(routes: RouteDefinition[]): string {
@@ -135,7 +145,26 @@ export function tamerRouterPlugin({
     name: 'tamer-router-plugin',
     async setup(api) {
       const projectRoot = (api.context as { rootPath?: string }).rootPath ?? process.cwd()
-      const resolvedOutput = path.resolve(projectRoot, output)
+      const outputPath = resolveOutputPath(output)
+      const resolvedOutput = path.resolve(projectRoot, outputPath)
+      const resolvedRoot = path.resolve(projectRoot, root)
+
+      function generate() {
+        const outputDir = path.dirname(resolvedOutput)
+        const routes = buildRouteDefinitions(resolvedRoot, {
+          layoutFilename,
+          root: resolvedRoot,
+          alias: srcAlias,
+          outputDir,
+        })
+        const content = generateRouteFile(routes)
+        fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true })
+        fs.writeFileSync(resolvedOutput, content, 'utf-8')
+        console.info(`[tamer-router] Routes generated at: ${outputPath}`)
+      }
+
+      generate()
+
       api.modifyRsbuildConfig((config) => {
         config.resolve = config.resolve || {}
         config.resolve.alias = {
@@ -146,44 +175,24 @@ export function tamerRouterPlugin({
         return config
       })
 
-      api.onBeforeCreateCompiler(async () => {
-        const resolvedRoot = path.resolve(projectRoot, root)
-
-        function generate() {
-          const outputDir = path.dirname(resolvedOutput)
-          const routes = buildRouteDefinitions(resolvedRoot, {
-            layoutFilename,
-            root: resolvedRoot,
-            alias: srcAlias,
-            outputDir,
-          })
-          const content = generateRouteFile(routes)
-          fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true })
-          fs.writeFileSync(resolvedOutput, content, 'utf-8')
-          console.info(`[tamer-router] Routes generated at: ${output}`)
-        }
-
-        generate()
-
-        const watcher = chokidar.watch(resolvedRoot, {
-          ignored: [/(^|[\/\\])\../, '**/node_modules/**'],
-          persistent: true,
-          ignoreInitial: true,
-          awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 500 },
-        })
-
-        const logChange = (type: string, filePath: string) => {
-          console.log(`[tamer-router] ${type}: ${filePath}`)
-          generate()
-        }
-
-        watcher
-          .on('add', (filePath) => logChange('File added', filePath))
-          .on('unlink', (filePath) => logChange('File removed', filePath))
-          .on('addDir', (dirPath) => logChange('Directory added', dirPath))
-          .on('unlinkDir', (dirPath) => logChange('Directory removed', dirPath))
-          .on('error', (err) => console.error('[tamer-router] Watcher error:', err))
+      const watcher = chokidar.watch(resolvedRoot, {
+        ignored: [/(^|[\/\\])\./, '**/node_modules/**', resolvedOutput],
+        persistent: true,
+        ignoreInitial: true,
+        awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 500 },
       })
+
+      const logChange = (type: string, filePath: string) => {
+        console.log(`[tamer-router] ${type}: ${filePath}`)
+        generate()
+      }
+
+      watcher
+        .on('add', (filePath) => logChange('File added', filePath))
+        .on('unlink', (filePath) => logChange('File removed', filePath))
+        .on('addDir', (dirPath) => logChange('Directory added', dirPath))
+        .on('unlinkDir', (dirPath) => logChange('Directory removed', dirPath))
+        .on('error', (err) => console.error('[tamer-router] Watcher error:', err))
     },
   }
 }

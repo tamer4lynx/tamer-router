@@ -8,6 +8,7 @@ import {
   SafeArea,
   Screen,
   TabBar,
+  type AppBarAction,
   type TabBarIconColor,
   type TabItem,
 } from '@tamer4lynx/tamer-app-shell'
@@ -17,6 +18,7 @@ type StyleProp = Record<string, unknown>
 export interface ScreenOptions {
   title?: string
   headerShown?: boolean
+  rightActions?: AppBarAction[]
 }
 
 export interface StackScreenProps {
@@ -32,13 +34,11 @@ const ScreenOptionsContext = createContext<{
 export function useScreenOptions(options: ScreenOptions | null): void {
   const ctx = useContext(ScreenOptionsContext)
   const setOptions = ctx?.setOptions
-  const title = options?.title
-  const headerShown = options?.headerShown
   useEffect(() => {
     if (!setOptions) return
     setOptions(options)
     return () => setOptions(null)
-  }, [setOptions, title, headerShown])
+  }, [setOptions, options])
 }
 
 export function StackScreen(_props: StackScreenProps) {
@@ -50,7 +50,12 @@ StackScreen.displayName = 'Stack.Screen'
 export interface StackProps {
   children?: React.ReactNode
   titleForPath?: (pathname: string) => string
-  screenOptions?: { headerStyle?: StyleProp; headerForegroundColor?: string; headerShown?: boolean }
+  screenOptions?: {
+    headerStyle?: StyleProp
+    headerForegroundColor?: string
+    headerShown?: boolean
+    rightActions?: AppBarAction[]
+  }
 }
 
 function getScreenOptionsFromChildren(children: React.ReactNode, pathname: string): ScreenOptions | null {
@@ -85,11 +90,19 @@ function StackOptionsProvider({
     merged.title ??
     (titleForPath ? titleForPath(pathname) : pathname === '/' ? '' : pathname.split('/').filter(Boolean).pop() ?? '')
   const showAppBar = merged.headerShown !== false && screenOptions?.headerShown !== false
+  const rightActions = merged.rightActions ?? screenOptions?.rightActions
   const value = React.useMemo(() => ({ setOptions: setScreenOpts }), [])
 
   return (
     <ScreenOptionsContext.Provider value={value}>
-      {showAppBar ? <AppBar title={title} style={screenOptions?.headerStyle as object} foregroundColor={screenOptions?.headerForegroundColor} /> : null}
+      {showAppBar ? (
+        <AppBar
+          title={title}
+          style={screenOptions?.headerStyle as object}
+          foregroundColor={screenOptions?.headerForegroundColor}
+          rightActions={rightActions}
+        />
+      ) : null}
       {children}
     </ScreenOptionsContext.Provider>
   )
@@ -150,6 +163,7 @@ export interface TabsProps {
     tabBarStyle?: StyleProp
     contentStyle?: StyleProp
     iconColor?: TabBarIconColor
+    rightActions?: AppBarAction[]
   }
 }
 
@@ -173,7 +187,6 @@ function TabsOptionsProvider({
   screenOptions,
   tabs,
   tabTitleFallback,
-  children,
 }: {
   layoutOptions: ScreenOptions | null
   pathname: string
@@ -181,7 +194,6 @@ function TabsOptionsProvider({
   screenOptions?: TabsProps['screenOptions']
   tabs: TabItem[]
   tabTitleFallback?: string
-  children: React.ReactNode
 }) {
   const [screenOpts, setScreenOpts] = useState<ScreenOptions | null>(null)
   const merged: ScreenOptions = { ...layoutOptions, ...screenOpts }
@@ -194,8 +206,17 @@ function TabsOptionsProvider({
 
   return (
     <ScreenOptionsContext.Provider value={value}>
-      {showAppBar ? <AppBar title={title} style={screenOptions?.headerStyle as object} foregroundColor={screenOptions?.headerForegroundColor} /> : null}
-      {children}
+      {showAppBar ? (
+        <AppBar
+          title={title}
+          style={screenOptions?.headerStyle as object}
+          foregroundColor={screenOptions?.headerForegroundColor}
+          rightActions={screenOptions?.rightActions}
+        />
+      ) : null}
+      <Content style={screenOptions?.contentStyle as object}>
+        <Outlet />
+      </Content>
       <TabBar tabs={tabs} style={screenOptions?.tabBarStyle as object} iconColor={screenOptions?.iconColor} />
     </ScreenOptionsContext.Provider>
   )
@@ -261,11 +282,7 @@ export function Tabs({ children, titleForPath, screenOptions }: TabsProps) {
             screenOptions={screenOptions}
             tabs={tabs}
             tabTitleFallback={tabTitleFallback}
-          >
-            <Content style={screenOptions?.contentStyle as object}>
-              <Outlet />
-            </Content>
-          </TabsOptionsProvider>
+          />
         </AppShellProvider>
       </SafeArea>
     </Screen>
