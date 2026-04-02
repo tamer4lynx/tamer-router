@@ -90,7 +90,6 @@ export function BackHandlerRoot({ children }: BackHandlerRootProps): JSX.Element
  * }, modalOpen)
  */
 export function useBackHandler(handler: () => boolean, enabled = true): void {
-  'background only'
   const registry = React.useContext(BackHandlerContext)
   const handlerRef = React.useRef(handler)
   handlerRef.current = handler
@@ -105,6 +104,5 @@ export function useBackHandler(handler: () => boolean, enabled = true): void {
  * While `enabled` is true, consumes every back event (same as `useBackHandler(() => enabled, enabled)`).
  */
 export function usePreventBack(enabled = true): void {
-  'background only'
-  useBackHandler(() => enabled, enabled)
+  useBackHandler(() => !!enabled, enabled)
 }

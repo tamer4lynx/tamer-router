@@ -11,6 +11,7 @@ import {
   type AppBarAction,
   type TabBarIconColor,
   type TabItem,
+  type ThemeColors,
 } from '@tamer4lynx/tamer-app-shell'
 
 type StyleProp = Record<string, unknown>
@@ -163,6 +164,10 @@ export interface TabsProps {
     tabBarStyle?: StyleProp
     contentStyle?: StyleProp
     iconColor?: TabBarIconColor
+    /** Tab strip background for pill contrast (usually matches `tabBarStyle.backgroundColor`). */
+    tabBarChromeHex?: string
+    /** Overrides `useThemeColors()` for TabBar resolution when you need a fixed palette. */
+    themeColors?: ThemeColors | null
     rightActions?: AppBarAction[]
   }
 }
@@ -217,7 +222,13 @@ function TabsOptionsProvider({
       <Content style={screenOptions?.contentStyle as object}>
         <Outlet />
       </Content>
-      <TabBar tabs={tabs} style={screenOptions?.tabBarStyle as object} iconColor={screenOptions?.iconColor} />
+      <TabBar
+        tabs={tabs}
+        style={screenOptions?.tabBarStyle as object}
+        iconColor={screenOptions?.iconColor}
+        tabBarChromeHex={screenOptions?.tabBarChromeHex}
+        themeColors={screenOptions?.themeColors}
+      />
     </ScreenOptionsContext.Provider>
   )
 }

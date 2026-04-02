@@ -16,4 +16,4 @@ export type {
   TabsScreenOptions,
   TabsScreenProps,
 } from './StackTabs.js'
-export type { AppBarAction } from '@tamer4lynx/tamer-app-shell'
+export type { AppBarAction, TabBarIconColor, ThemeColors } from '@tamer4lynx/tamer-app-shell'
