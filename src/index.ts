@@ -1,3 +1,5 @@
+export { StackNavigator } from './StackNavigator.js'
+export type { StackEntry, StackNavigatorProps } from './StackNavigator.js'
 export { Outlet } from 'react-router'
 export { Outlet as Slot } from 'react-router'
 export { useLocation, useNavigate, useOutlet, useParams } from 'react-router'
