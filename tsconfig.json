@@ -15,7 +15,13 @@
     "jsx": "react-jsx",
     "noEmit": false,
     "isolatedModules": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@tamer4lynx/tamer-app-shell": [
+        "../tamer-app-shell/dist/src/index.d.ts"
+      ]
+    }
   },
   "include": ["src/**/*", "tamer.config.ts"],
   "exclude": ["node_modules", "dist"]

@@ -1,5 +1,11 @@
-import type { RouteObject } from 'react-router'
+import { createRootRoute } from '@tanstack/react-router'
 
-const routes: RouteObject[] = []
+function EmptyRoute() {
+  return null
+}
+
+const routes = createRootRoute({
+  component: EmptyRoute,
+}).addChildren([])
 
 export default routes
