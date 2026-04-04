@@ -13,6 +13,7 @@ import {
 } from '@tanstack/react-router'
 import { AppShellRouterContext, type AppShellRouterContextValue } from '@tamer4lynx/tamer-app-shell'
 import {
+  type BackHandlerRegistry,
   BackHandlerContext,
   createBackHandlerRegistry,
   useTamerBackEvent,
@@ -23,7 +24,10 @@ export interface FileRouterProps {
   routes: AnyRoute
   basename?: string
   transitionConfig?: TransitionConfig
+  navigationHost?: NavigationHost
 }
+
+export type NavigationHost = 'native-module' | 'nav-screen'
 
 declare const lynx: { getJSModule?(id: string): { addListener?(e: string, fn: (ev: { payload?: string }) => void): void; removeListener?(e: string, fn: unknown): void } } | undefined
 export type TransitionDirection = 'left' | 'right'
@@ -135,6 +139,19 @@ interface NavigationController {
   getHistoryState(): { entries: NavigationEntry[]; index: number }
 }
 
+interface RenderedStackEntry extends NavigationEntry {
+  visible: boolean
+  transition: NavScreenTransition
+}
+
+type NavScreenTransition =
+  | 'slide-right'
+  | 'slide-left'
+  | 'slide-up'
+  | 'slide-down'
+  | 'fade'
+  | 'none'
+
 type RegisteredRouteTree = RegisteredRouter['routeTree']
 
 export type TamerRoutePath<TRouteTree extends AnyRoute = RegisteredRouteTree> = RoutePaths<TRouteTree>
@@ -184,6 +201,11 @@ function resolveNavigationHref(
 ): string {
   if (typeof to === 'string') return to
   return router.buildLocation(to).href
+}
+
+function getNavScreenTransition(transitionConfig?: TransitionConfig): NavScreenTransition {
+  if (transitionConfig?.direction === 'left') return 'slide-left'
+  return 'slide-right'
 }
 
 function parseHistoryHref(href: string, state: HistoryState): HistoryLocation {
@@ -403,33 +425,46 @@ function NavigationAnimator() {
 }
 
 const NavigationContext = React.createContext<NavigationController | null>(null)
+const NavigationHostContext = React.createContext<NavigationHost>('native-module')
 
-function useNativeTransitionActions(controller: NavigationController | null) {
+function useNativeTransitionActions(controller: NavigationController | null, navigationHost: NavigationHost) {
   const push = React.useCallback((route: string, options?: TransitionOptions) => {
+    if (navigationHost === 'nav-screen') {
+      controller?.push(route)
+      return
+    }
     const mod = NativeModules?.TamerRouterNativeModule
     const opts = stringifyOptions(options)
     const doPush = () => controller?.push(route)
     if (mod?.requestPush) mod.requestPush(route, opts, doPush)
     else doPush()
-  }, [controller])
+  }, [controller, navigationHost])
 
   const replace = React.useCallback((route: string, options?: TransitionOptions) => {
+    if (navigationHost === 'nav-screen') {
+      controller?.replace(route)
+      return
+    }
     const mod = NativeModules?.TamerRouterNativeModule
     const opts = stringifyOptions(options)
     const doReplace = () => controller?.replace(route)
     if (mod?.setTransitionOptions && opts != null) mod.setTransitionOptions(opts)
     if (mod?.requestReplace) mod.requestReplace(route, opts, doReplace)
     else doReplace()
-  }, [controller])
+  }, [controller, navigationHost])
 
   const back = React.useCallback((options?: TransitionOptions) => {
+    if (navigationHost === 'nav-screen') {
+      controller?.back()
+      return
+    }
     const mod = NativeModules?.TamerRouterNativeModule
     const opts = stringifyOptions(options)
     const doBack = () => controller?.back()
     if (mod?.requestPop) mod.requestPop(opts, doBack)
     else if (mod?.preparePop) mod.preparePop(opts)
     else doBack()
-  }, [controller])
+  }, [controller, navigationHost])
 
   return React.useMemo(() => ({ push, replace, back }), [back, push, replace])
 }
@@ -566,7 +601,198 @@ function LynxRouterProvider({ router }: { router: TanStackRouterLike }) {
   return provider
 }
 
-export function FileRouter({ routes, basename = '/', transitionConfig }: FileRouterProps): JSX.Element {
+function createScreenRouter(routes: AnyRoute, basename: string, initialPath: string): TanStackRouterLike {
+  const history = createLynxMemoryHistory({
+    initialEntries: [initialPath],
+  })
+
+  return createRouter({
+    routeTree: routes,
+    history,
+    basepath: basename,
+  }) as unknown as TanStackRouterLike
+}
+
+interface StackHostScreenProps {
+  entry: RenderedStackEntry
+  routes: AnyRoute
+  basename: string
+  navigationElement?: boolean
+  onBackRegistry: (key: string, registry: BackHandlerRegistry | null) => void
+}
+
+const StackHostScreen = React.memo(function StackHostScreen({
+  entry,
+  routes,
+  basename,
+  navigationElement = false,
+  onBackRegistry,
+}: StackHostScreenProps) {
+  const routerRef = React.useRef<TanStackRouterLike | null>(null)
+  const backHandlerRegistry = React.useMemo(() => createBackHandlerRegistry(), [])
+
+  if (!routerRef.current) {
+    routerRef.current = createScreenRouter(routes, basename, entry.path)
+  }
+
+  React.useEffect(() => {
+    const router = routerRef.current
+    if (!router) return
+    if (getLocationPath(router.state.location) !== entry.path) {
+      router.history.replace(entry.path)
+    }
+  }, [entry.path])
+
+  React.useEffect(() => {
+    onBackRegistry(entry.key, backHandlerRegistry)
+    return () => onBackRegistry(entry.key, null)
+  }, [backHandlerRegistry, entry.key, onBackRegistry])
+
+  const content = React.createElement(
+    BackHandlerContext.Provider,
+    { value: backHandlerRegistry },
+    React.createElement(LynxRouterProvider, { router: routerRef.current }),
+  )
+
+  if (!navigationElement) return content
+
+  return React.createElement(
+    'nav-screen' as unknown as React.ElementType,
+    {
+      'screen-id': entry.key,
+      visible: entry.visible,
+      transition: entry.transition,
+    },
+    content,
+  )
+})
+
+const NAV_SCREEN_EXIT_MS = 320
+
+function NavScreenStackHost({
+  controller,
+  router,
+  routes,
+  basename,
+  transitionConfig,
+  activeBackHandlerRegistryRef,
+}: {
+  controller: NavigationController
+  router: TanStackRouterLike
+  routes: AnyRoute
+  basename: string
+  transitionConfig?: TransitionConfig
+  activeBackHandlerRegistryRef: React.MutableRefObject<BackHandlerRegistry | null>
+}) {
+  const defaultTransition = getNavScreenTransition(transitionConfig)
+  const backRegistryByKeyRef = React.useRef(new Map<string, BackHandlerRegistry>())
+  const removalTimeoutsRef = React.useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const [renderedEntries, setRenderedEntries] = React.useState<RenderedStackEntry[]>(() => {
+    const historyState = controller.getHistoryState()
+    return historyState.entries.map((entry, index) => ({
+      ...entry,
+      visible: true,
+      transition: index === 0 ? 'none' : defaultTransition,
+    }))
+  })
+
+  const registerBackRegistry = React.useCallback((key: string, registry: BackHandlerRegistry | null) => {
+    const map = backRegistryByKeyRef.current
+    if (registry) map.set(key, registry)
+    else map.delete(key)
+  }, [])
+
+  React.useEffect(() => () => {
+    removalTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId))
+    removalTimeoutsRef.current.clear()
+  }, [])
+
+  React.useEffect(() => subscribeToHistory(router, () => {
+    const historyState = controller.getHistoryState()
+    const nextEntries = historyState.entries
+    const nextEntryKeys = new Set(nextEntries.map((entry) => entry.key))
+    const action = controller.consumePendingAction()
+
+    setRenderedEntries((currentEntries) => {
+      const nextRenderedEntries = nextEntries.map((entry, index) => {
+        const existing = currentEntries.find((candidate) => candidate.key === entry.key)
+        if (existing) {
+          return {
+            ...existing,
+            path: entry.path,
+            visible: true,
+          }
+        }
+
+        return {
+          ...entry,
+          visible: true,
+          transition: index === 0 ? 'none' : defaultTransition,
+        }
+      })
+
+      currentEntries.forEach((entry) => {
+        if (nextEntryKeys.has(entry.key)) return
+
+        const existingTimeout = removalTimeoutsRef.current.get(entry.key)
+        if (existingTimeout) clearTimeout(existingTimeout)
+
+        if (action === 'back') {
+          nextRenderedEntries.push({
+            ...entry,
+            visible: false,
+          })
+
+          const timeoutId = setTimeout(() => {
+            removalTimeoutsRef.current.delete(entry.key)
+            setRenderedEntries((latestEntries) => latestEntries.filter((candidate) => candidate.key !== entry.key))
+          }, NAV_SCREEN_EXIT_MS)
+
+          removalTimeoutsRef.current.set(entry.key, timeoutId)
+        } else {
+          removalTimeoutsRef.current.delete(entry.key)
+        }
+      })
+
+      return nextRenderedEntries
+    })
+  }), [controller, defaultTransition, router])
+
+  React.useEffect(() => {
+    const activeEntry = [...renderedEntries].reverse().find((entry) => entry.visible) ?? null
+    activeBackHandlerRegistryRef.current = activeEntry ? backRegistryByKeyRef.current.get(activeEntry.key) ?? null : null
+  }, [activeBackHandlerRegistryRef, renderedEntries])
+
+  const rootEntry = renderedEntries[0]
+  const overlayEntries = renderedEntries.slice(1)
+
+  return React.createElement(
+    React.Fragment,
+    null,
+    rootEntry ? React.createElement(StackHostScreen, {
+      key: rootEntry.key,
+      entry: rootEntry,
+      routes,
+      basename,
+      onBackRegistry: registerBackRegistry,
+    }) : null,
+    ...overlayEntries.map((entry) => React.createElement(StackHostScreen, {
+      key: entry.key,
+      entry,
+      routes,
+      basename,
+      navigationElement: true,
+      onBackRegistry: registerBackRegistry,
+    })),
+  )
+}
+
+export function FileRouter({
+  routes,
+  basename = '/',
+  transitionConfig,
+  navigationHost = 'native-module',
+}: FileRouterProps): JSX.Element {
   if (!routes || typeof routes !== 'object') {
     throw new Error('tamer-router: routes must be a generated TanStack route tree. Ensure pluginTamer() is configured and src/pages contains route files.')
   }
@@ -599,8 +825,20 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
 
   const router = routerRef.current
   const controller = useNavigationController(router, initialHistoryStateRef.current)
-  const transitionActions = useNativeTransitionActions(controller)
-  const backHandlerRegistry = React.useMemo(() => createBackHandlerRegistry(), [])
+  const transitionActions = useNativeTransitionActions(controller, navigationHost)
+  const rootBackHandlerRegistry = React.useMemo(() => createBackHandlerRegistry(), [])
+  const activeBackHandlerRegistryRef = React.useRef<BackHandlerRegistry | null>(null)
+  const delegatedBackHandlerRegistry = React.useMemo<BackHandlerRegistry>(() => ({
+    add() {
+      return () => {}
+    },
+    invoke() {
+      return activeBackHandlerRegistryRef.current?.invoke() ?? false
+    },
+  }), [])
+  const backHandlerRegistry = navigationHost === 'nav-screen'
+    ? delegatedBackHandlerRegistry
+    : rootBackHandlerRegistry
   const onBackUnhandled = React.useCallback(() => {
     const canGoBack = controller.canGoBack()
     if (canGoBack) controller.back()
@@ -649,12 +887,25 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
     NavigationContext.Provider,
     { value: controller },
     React.createElement(
-      BackHandlerContext.Provider,
-      { value: backHandlerRegistry },
+      NavigationHostContext.Provider,
+      { value: navigationHost },
       React.createElement(
-        AppShellRouterContext.Provider as React.Provider<AppShellRouterContextValue>,
-        { value: appShellRouterValue },
-        React.createElement(LynxRouterProvider, { router }),
+        BackHandlerContext.Provider,
+        { value: backHandlerRegistry },
+        React.createElement(
+          AppShellRouterContext.Provider as React.Provider<AppShellRouterContextValue>,
+          { value: appShellRouterValue },
+          navigationHost === 'nav-screen'
+            ? React.createElement(NavScreenStackHost, {
+                controller,
+                router,
+                routes,
+                basename,
+                transitionConfig,
+                activeBackHandlerRegistryRef,
+              })
+            : React.createElement(LynxRouterProvider, { router }),
+        ),
       ),
     ),
   )
@@ -662,8 +913,9 @@ export function FileRouter({ routes, basename = '/', transitionConfig }: FileRou
 
 export function useTamerNavigate(): TamerNavigateApi {
   const controller = React.useContext(NavigationContext)
+  const navigationHost = React.useContext(NavigationHostContext)
   const router = useRouter() as unknown as TanStackRouterLike
-  const transitionActions = useNativeTransitionActions(controller)
+  const transitionActions = useNativeTransitionActions(controller, navigationHost)
   const canGoBack = React.useCallback(() => controller?.canGoBack() ?? false, [controller])
   const push = React.useMemo<TamerNavigateFn>(() => (
     (to: string | Record<string, unknown>, options?: TransitionOptions) => {
