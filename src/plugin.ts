@@ -98,8 +98,6 @@ function buildRouteNodes(
       layoutImportPath = formatImportPath(fullPath, options.outputDir)
     }
   }
-  return `/${[...segments, fileName].filter(Boolean).join('/')}`
-}
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry)
