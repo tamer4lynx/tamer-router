@@ -61,7 +61,7 @@ export interface BackHandlerRootProps {
 }
 
 /**
- * Minimal root for `useBackHandler` / `usePreventBack` without `FileRouter` or react-router.
+ * Minimal root for `useBackHandler` / `usePreventBack` without `FileRouter`.
  * Still requires the same native setup (`lynx.ext.json`, `TamerRouterNativeModule`).
  * When no handler consumes back, `didHandleBack(false)` is called (e.g. host may finish Activity).
  */
