@@ -164,9 +164,7 @@ export interface TabsProps {
     tabBarStyle?: StyleProp
     contentStyle?: StyleProp
     iconColor?: TabBarIconColor
-    /** Tab strip background for pill contrast (usually matches `tabBarStyle.backgroundColor`). */
     tabBarChromeHex?: string
-    /** Overrides `useThemeColors()` for TabBar resolution when you need a fixed palette. */
     themeColors?: ThemeColors | null
     rightActions?: AppBarAction[]
   }

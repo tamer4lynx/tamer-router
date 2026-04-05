@@ -6,14 +6,12 @@ import chokidar from 'chokidar'
 
 export interface TamerRouterPluginOptions {
   root: string
-  /** Defaults to `node_modules/.tamer-router/_generated_routes.tsx` under the Rsbuild project root. */
   output?: string
   srcAlias?: string
   layoutFilename?: string
   globalStyleImports?: string[]
 }
 
-/** Relative to the Rsbuild project root (`api.context.rootPath`). */
 export const DEFAULT_TAMER_ROUTER_OUTPUT = 'node_modules/.tamer-router/_generated_routes.tsx'
 
 function resolveOutputPath(output: string | undefined): string {
@@ -75,7 +73,6 @@ function createLayoutId(segments: string[]): string {
 function formatImportPath(filePath: string, outputDir: string): string {
   const rel = path.relative(outputDir, filePath).replace(/\\/g, '/').replace(/\.(tsx|ts|jsx|js)$/, '')
   const base = rel.startsWith('.') ? rel : './' + rel
-  // `.js` for TypeScript `node16`/`nodenext` resolution; bundlers resolve `.js` to `.tsx`/`.ts` sources.
   return `${base}.js`
 }
 
@@ -101,6 +98,8 @@ function buildRouteNodes(
       layoutImportPath = formatImportPath(fullPath, options.outputDir)
     }
   }
+  return `/${[...segments, fileName].filter(Boolean).join('/')}`
+}
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry)
@@ -191,11 +190,11 @@ function generateRouteFile(
   function emitNode(node: RouteNode, parentVar: string): string {
     const componentVar = importComponent(node.importPath)
     const routeVar = toIdentifier('Route', `${routeCounter++}-${node.routeId}`)
-        const props = [
-          `getParentRoute: () => ${parentVar}`,
-          `path: ${JSON.stringify(node.path)}`,
-          `component: ${componentVar}`,
-        ]
+    const props = [
+      `getParentRoute: () => ${parentVar}`,
+      `path: ${JSON.stringify(node.path)}`,
+      `component: ${componentVar}`,
+    ]
     statements.push(`const ${routeVar} = createRoute({\n  ${props.join(',\n  ')}\n})`)
     if (node.kind === 'layout') {
       const childVars = node.children.map((child) => emitNode(child, routeVar))

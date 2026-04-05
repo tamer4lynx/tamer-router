@@ -4,7 +4,6 @@ export { Outlet, Slot, useLocation, useNavigate, useOutlet, useParams } from './
 export { FileRouter, useTamerNavigate, useTamerRouter } from './FileRouter.js'
 export type {
   FileRouterProps,
-  NavigationHost,
   TamerNavigateApi,
   TamerNavigateFn,
   TamerRoutePath,
