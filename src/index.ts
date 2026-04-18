@@ -1,33 +1,39 @@
-import 'url-search-params-polyfill'
+/// <reference types="@lynx-js/react" />
+import '@tamer4lynx/tamer-navigation'
 
-export { Outlet, Slot, useLocation, useNavigate, useOutlet, useParams } from './router-compat.js'
-export { FileRouter, useTamerNavigate, useTamerRouter } from './FileRouter.js'
+export {
+  BackHandlerContext,
+  BackHandlerProvider,
+  BackHandlerRoot,
+  createBackHandlerRegistry,
+  useBackHandler,
+  useBackHandlerSetup,
+  usePreventBack,
+} from './back-handler.js'
+export type { BackHandlerProviderProps, BackHandlerRootProps } from './back-handler.js'
+export {
+  StackProvider,
+  useStackContext,
+  createStackContextValue,
+} from './stack-context.js'
+export type { StackEntry, StackContextValue } from './stack-context.js'
+export { FileRouter, Navigate, useLocation, useNavigate, useOutlet, useParams, useScreenOptions, useTamerNavigate, useTamerRouter } from './router.js'
+export type { FileRouterAppShellOptions, FileRouterProps, NavigateFunction, NavigateProps } from './router.js'
+export { Outlet, Rail, Slot, Stack, Tab, Tabs, useLayoutSlot } from './layouts.js'
 export type {
-  FileRouterProps,
-  TamerNavigateApi,
-  TamerNavigateFn,
-  TamerRoutePath,
-  TamerToOptions,
-  TransitionConfig,
-  TransitionDirection,
-  TransitionMode,
-  TransitionOptions,
-} from './FileRouter.js'
-export { Link, useLinkHref } from './Link.js'
-export type { LinkHrefFn, LinkProps, LinkRenderState } from './Link.js'
-export { BackHandlerRoot, useBackHandler, usePreventBack } from './back-handler.js'
-export type { BackHandlerRootProps, BackHandlerRegistry } from './back-handler.js'
-export { Stack, TabsLayout as Tabs } from './StackTabs.js'
-export { StackScreen, TabsScreen } from './StackTabs.js'
-export { useScreenOptions } from './StackTabs.js'
-export type {
+  GeneratedLayoutChild,
+  GeneratedLayoutDefinition,
+  GeneratedRouteDefinition,
+  GeneratedRoutesManifest,
+  GeneratedScreenDeclaration,
+  Href,
+  HrefObject,
+  LayoutKind,
+  LinkingConfig,
+  RouteParams,
+  RoutePath,
   ScreenOptions,
-  StackProps,
-  StackScreenProps,
-  TabsProps,
-  TabsScreenOptions,
-  TabsScreenProps,
-} from './StackTabs.js'
-export { getRouteApi, redirect, useMatchRoute, useSearch } from '@tanstack/react-router'
-export type { LinkOptions, MatchRouteOptions, NavigateOptions, RouteByPath, RoutePaths, ToOptions } from '@tanstack/react-router'
-export type { AppBarAction, TabBarIconColor, ThemeColors } from '@tamer4lynx/tamer-app-shell'
+  TransitionConfig,
+  TransitionOptions,
+} from './types.js'
+export type { ThemeColors } from '@tamer4lynx/tamer-system-ui'

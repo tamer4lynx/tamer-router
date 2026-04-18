@@ -1,11 +1,15 @@
-import { createRootRoute } from '@tanstack/react-router'
+import type { GeneratedRoutesManifest, LinkingConfig } from './types.js'
 
-function EmptyRoute() {
-  return null
+const generatedRoutes: GeneratedRoutesManifest = {
+  layouts: {},
+  routes: [],
+  initialPath: '/',
+  defaultPathByBasePath: { '/': '/' },
 }
 
-const routes = createRootRoute({
-  component: EmptyRoute,
-}).addChildren([])
+export const tamerLinking: LinkingConfig = {
+  prefixes: ['/'],
+}
 
-export default routes
+export default generatedRoutes
+

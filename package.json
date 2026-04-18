@@ -3,7 +3,7 @@
   "version": "0.0.10",
   "publishConfig": { "access": "public", "tag": "prerelease" },
   "type": "module",
-  "description": "File-based routing for Lynx with TanStack Router. Rsbuild plugin + memory routing.",
+  "description": "Native-first file-based routing for Lynx with a base route and flat nav-screen overlays.",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "exports": {
@@ -31,6 +31,11 @@
       "types": "./dist/src/generated-routes.d.ts",
       "import": "./dist/src/generated-routes.js",
       "default": "./dist/src/generated-routes.js"
+    },
+    "./generated-routes-meta": {
+      "types": "./dist/src/generated-routes-meta.d.ts",
+      "import": "./dist/src/generated-routes-meta.js",
+      "default": "./dist/src/generated-routes-meta.js"
     }
   },
   "files": [
@@ -47,14 +52,14 @@
     "build": "rm -rf dist && tsc && cp src/tamer-router.css dist/src/tamer-router.css"
   },
   "peerDependencies": {
+    "@tamer4lynx/tamer-navigation": "^0.0.1",
     "react": "^17.0.0"
   },
   "dependencies": {
     "@rsbuild/core": "^1.3.0",
-    "@tanstack/history": "1.15.13",
-    "@tanstack/react-router": "1.20.0",
     "chokidar": "^4.0.0",
     "@tamer4lynx/tamer-app-shell": "^0.0.5",
+    "@tamer4lynx/tamer-system-ui": "^0.0.3",
     "url-search-params-polyfill": "^8.2.5"
   },
   "devDependencies": {
