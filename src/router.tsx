@@ -58,8 +58,8 @@ interface StackEntry {
   visitedPathsByLayoutKey: Record<string, Record<string, string>>
 }
 
-function stackOrderForOverlay(overlayIndex: number): number {
-  return overlayIndex
+function stackOrderForEntry(entryIndex: number): number {
+  return entryIndex
 }
 
 function resolveRouterBackground(
@@ -104,6 +104,7 @@ interface LocationContextValue {
 }
 
 const EXIT_DELAY_MS = 320
+type RouterNavTransition = 'slide-right' | 'slide-left' | 'slide-up' | 'slide-down' | 'fade' | 'none'
 
 const RouterContext = React.createContext<RouterContextValue | null>(null)
 const LocationContext = React.createContext<LocationContextValue | null>(null)
@@ -377,29 +378,39 @@ function EntryRenderer({
 
 const MemoizedEntryRenderer = React.memo(EntryRenderer)
 
-function BaseEntryScreen({
+function StackEntryScreen({
   back,
   canGoBack,
   entry,
+  isVisible,
   manifest,
+  navTransition,
   overlayBackgroundColor,
   replace,
   routeSuspense,
   routeSuspenseFallback,
   setScreenOptions,
+  stackOrder,
 }: {
   back: () => void
   canGoBack: boolean
   entry: StackEntry
+  isVisible: boolean
   manifest: GeneratedRoutesManifest
+  navTransition: RouterNavTransition
   overlayBackgroundColor: string
   replace: RouterContextValue['replace']
   routeSuspense: boolean
   routeSuspenseFallback?: ReactNode
   setScreenOptions: (entryId: string, pathname: string, options: ScreenOptions | null) => void
+  stackOrder: number
 }): JSX.Element {
   return (
-    <view
+    <nav-screen
+      screen-id={`tamer-router-${entry.id}`}
+      stack-order={stackOrder}
+      visible={isVisible}
+      nav-transition={navTransition}
       style={{
         flex: 1,
         position: 'absolute',
@@ -411,66 +422,6 @@ function BaseEntryScreen({
         flexDirection: 'column',
         minHeight: '100%',
         backgroundColor: overlayBackgroundColor,
-        zIndex: -1,
-      }}
-    >
-      <MemoizedEntryRenderer
-        back={back}
-        canGoBack={canGoBack}
-        entry={entry}
-        manifest={manifest}
-        overlayBackgroundColor={overlayBackgroundColor}
-        replace={replace}
-        routeSuspense={routeSuspense}
-        routeSuspenseFallback={routeSuspenseFallback}
-        setScreenOptions={setScreenOptions}
-      />
-    </view>
-  )
-}
-
-const MemoizedBaseEntryScreen = React.memo(BaseEntryScreen)
-
-function OverlayEntryScreen({
-  back,
-  canGoBack,
-  entry,
-  isVisible,
-  manifest,
-  overlayBackgroundColor,
-  replace,
-  routeSuspense,
-  routeSuspenseFallback,
-  setScreenOptions,
-  stackOrder,
-  stackZIndex,
-}: {
-  back: () => void
-  canGoBack: boolean
-  entry: StackEntry
-  isVisible: boolean
-  manifest: GeneratedRoutesManifest
-  overlayBackgroundColor: string
-  replace: RouterContextValue['replace']
-  routeSuspense: boolean
-  routeSuspenseFallback?: ReactNode
-  setScreenOptions: (entryId: string, pathname: string, options: ScreenOptions | null) => void
-  stackOrder: number
-  stackZIndex: number
-}): JSX.Element {
-  return (
-    <nav-screen
-      screen-id={`tamer-router-${entry.id}`}
-      stack-order={stackOrder}
-      visible={isVisible}
-      nav-transition="slide-right"
-      style={{
-        flex: 1,
-        position: 'absolute',
-        zIndex: stackZIndex,
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: '100%',
         height: '100vh',
         width: '100vw',
       }}
@@ -490,7 +441,7 @@ function OverlayEntryScreen({
   )
 }
 
-const MemoizedOverlayEntryScreen = React.memo(OverlayEntryScreen)
+const MemoizedStackEntryScreen = React.memo(StackEntryScreen)
 
 export interface FileRouterAppShellOptions {
   showAppBar?: boolean
@@ -854,50 +805,42 @@ export function FileRouter({
     [back, canGoBack, pop, push, replace],
   )
 
-  const baseEntry = entries[0] ?? null
-  const routeStack = entries.slice(1)
-  const baseEntryCanGoBack = React.useMemo(
-    () => (baseEntry ? canEntryGoBack(manifest, baseEntry, 0) : false),
-    [baseEntry, manifest],
-  )
-
   const routerBody = (
     <RouterContext.Provider value={routerValue}>
-      {baseEntry ? (
-        <MemoizedBaseEntryScreen
-          key={baseEntry.id}
-          back={back}
-          canGoBack={baseEntryCanGoBack}
-          entry={baseEntry}
-          manifest={manifest}
-          overlayBackgroundColor={resolvedRootBg}
-          replace={replace}
-          routeSuspense={enableRouteSuspense}
-          routeSuspenseFallback={routeSuspenseFallback}
-          setScreenOptions={setScreenOptions}
-        />
-      ) : null}
-      {routeStack.map((entry, index) => {
-        const isVisible = closingEntryId !== entry.id
-        const overlayCanGoBack = canEntryGoBack(manifest, entry, index + 1)
-        return (
-          <MemoizedOverlayEntryScreen
-            key={entry.id}
-            back={back}
-            canGoBack={overlayCanGoBack}
-            entry={entry}
-            isVisible={isVisible}
-            manifest={manifest}
-            overlayBackgroundColor={resolvedOverlayBg}
-            replace={replace}
-            routeSuspense={enableRouteSuspense}
-            routeSuspenseFallback={routeSuspenseFallback}
-            setScreenOptions={setScreenOptions}
-            stackOrder={stackOrderForOverlay(index)}
-            stackZIndex={index}
-          />
-        )
-      })}
+      <view
+        style={{
+          flex: 1,
+          minHeight: '100%',
+          width: '100%',
+          backgroundColor: resolvedRootBg,
+        }}
+      >
+        {entries.map((entry, index) => {
+          const isVisible = closingEntryId !== entry.id
+          const entryCanGoBack = canEntryGoBack(manifest, entry, index)
+          const isBaseEntry = index === 0
+          const entryBackgroundColor = isBaseEntry ? resolvedRootBg : resolvedOverlayBg
+          const navTransition = isBaseEntry ? 'none' : 'slide-right'
+          const stackOrder = stackOrderForEntry(index)
+          return (
+            <MemoizedStackEntryScreen
+              key={entry.id}
+              back={back}
+              canGoBack={entryCanGoBack}
+              entry={entry}
+              isVisible={isVisible}
+              manifest={manifest}
+              navTransition={navTransition}
+              overlayBackgroundColor={entryBackgroundColor}
+              replace={replace}
+              routeSuspense={enableRouteSuspense}
+              routeSuspenseFallback={routeSuspenseFallback}
+              setScreenOptions={setScreenOptions}
+              stackOrder={stackOrder}
+            />
+          )
+        })}
+      </view>
     </RouterContext.Provider>
   )
 

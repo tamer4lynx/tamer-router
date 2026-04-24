@@ -1,6 +1,8 @@
 package com.nanofuxion.tamerrouter
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.lynx.jsbridge.LynxMethod
 import com.lynx.jsbridge.LynxModule
@@ -27,6 +29,7 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
 
     companion object {
         private const val TAG = "TamerRouterNative"
+        private const val BACK_TIMEOUT_MS = 1000L
 
         @Volatile
         var instance: TamerRouterNativeModule? = null
@@ -43,6 +46,8 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
 
         @Volatile
         private var historyStateSessionId: String = hostSessionId
+
+        private val mainHandler = Handler(Looper.getMainLooper())
 
         private fun createSessionId(): String {
             return "${System.currentTimeMillis().toString(36)}-${java.util.UUID.randomUUID().toString().take(8)}"
@@ -61,24 +66,23 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
          * Emits a global event and invokes the registered JS callback.
          */
         fun requestBack(fallback: ((Boolean) -> Unit)? = null) {
-            Log.d(TAG, "requestBack called, lynxContext=${if (lynxContext != null) "SET" else "NULL"}")
-            // Emit global event for JS listeners
-            val params = JavaOnlyArray()
-            if (lynxContext != null) {
-                Log.d(TAG, "Emitting backButtonPressed event")
-                lynxContext?.sendGlobalEvent("backButtonPressed", params)
-            } else {
-                Log.w(TAG, "lynxContext is null, cannot emit event")
+            val module = instance
+            if (module == null) {
+                fallback?.invoke(false)
+                return
             }
-
-            // Also invoke direct callback if registered
-            instance?.invokeBackCallback()
+            module.sendBackEvent(fallback)
         }
 
     }
 
     @Volatile
     private var backButtonCallback: (Callback)? = null
+
+    @Volatile
+    private var pendingBackCallback: ((Boolean) -> Unit)? = null
+
+    private var backTimeoutRunnable: Runnable? = null
 
     /**
      * Registers a JS callback to be invoked when hardware back is pressed.
@@ -102,6 +106,48 @@ class TamerRouterNativeModule(context: Context) : LynxModule(context) {
         } else {
             Log.w(TAG, "No back button callback registered!")
         }
+    }
+
+    private fun sendBackEvent(fallback: ((Boolean) -> Unit)?) {
+        if (pendingBackCallback != null) {
+            fallback?.invoke(true)
+            return
+        }
+
+        pendingBackCallback = fallback
+
+        Log.d(TAG, "requestBack called, lynxContext=${if (lynxContext != null) "SET" else "NULL"}")
+        val params = JavaOnlyArray()
+        if (lynxContext != null) {
+            Log.d(TAG, "Emitting backButtonPressed event")
+            lynxContext?.sendGlobalEvent("backButtonPressed", params)
+        } else {
+            Log.w(TAG, "lynxContext is null, cannot emit event")
+        }
+
+        invokeBackCallback()
+        scheduleBackTimeout()
+    }
+
+    private fun scheduleBackTimeout() {
+        backTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        val runnable = Runnable {
+            val callback = pendingBackCallback
+            pendingBackCallback = null
+            backTimeoutRunnable = null
+            callback?.invoke(false)
+        }
+        backTimeoutRunnable = runnable
+        mainHandler.postDelayed(runnable, BACK_TIMEOUT_MS)
+    }
+
+    @LynxMethod
+    fun didHandleBack(consumed: Boolean) {
+        backTimeoutRunnable?.let(mainHandler::removeCallbacks)
+        backTimeoutRunnable = null
+        val callback = pendingBackCallback
+        pendingBackCallback = null
+        callback?.invoke(consumed)
     }
 
     @LynxMethod

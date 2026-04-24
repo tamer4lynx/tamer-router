@@ -12,6 +12,7 @@ public final class TamerRouterNativeModule: NSObject, LynxModule {
 
     public static var methodLookup: [String: String] {
         [
+            "registerBackButtonListener": NSStringFromSelector(#selector(registerBackButtonListener(_:))),
             "setHistoryState": NSStringFromSelector(#selector(setHistoryState(_:))),
             "consumeHistoryState": NSStringFromSelector(#selector(consumeHistoryState(_:))),
             "didHandleBack": NSStringFromSelector(#selector(didHandleBack(_:))),
@@ -36,6 +37,7 @@ public final class TamerRouterNativeModule: NSObject, LynxModule {
     private static weak var hostView: UIView?
 
     private weak var lynxContext: LynxContext?
+    private var backButtonListener: (() -> Void)?
     private var pendingBackCallback: ((Bool) -> Void)?
     private var backTimeoutWorkItem: DispatchWorkItem?
 
@@ -48,6 +50,10 @@ public final class TamerRouterNativeModule: NSObject, LynxModule {
     public override init() {
         super.init()
         Self.instance = self
+    }
+
+    @objc func registerBackButtonListener(_ callback: @escaping () -> Void) {
+        backButtonListener = callback
     }
 
     @objc func setHistoryState(_ stateJson: String) {
@@ -117,6 +123,12 @@ public final class TamerRouterNativeModule: NSObject, LynxModule {
     }
 
     private func emitBack() {
+        if let listener = backButtonListener {
+            DispatchQueue.main.async {
+                listener()
+            }
+            return
+        }
         guard let ctx = lynxContext else { return }
         emitEvent(ctx, name: "tamer-router:back", payload: "{}")
     }
