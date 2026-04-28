@@ -39,6 +39,8 @@ export function createBackHandlerRegistry(): BackHandlerRegistry {
 }
 
 export const BackHandlerContext = React.createContext<BackHandlerRegistry | null>(null)
+/** @deprecated Use {@link BackHandlerContext}. */
+export const BackHandlerRegistryContext = BackHandlerContext
 
 export function useBackHandlerListeners(
   registry: BackHandlerRegistry,
@@ -59,12 +61,9 @@ export function useBackHandlerListeners(
     NativeModules?.TamerRouterNativeModule?.didHandleBack?.(consumed)
   }, [registry])
 
-  // Listen via Lynx global event hooks (synchronous registration)
   useLynxGlobalEventListener('backButtonPressed', dispatchBack)
   useLynxGlobalEventListener('tamer-router:back', dispatchBack)
 
-  // Also register the direct callback with the native module.
-  // Use useMemo so it happens during render, not after paint.
   React.useMemo(() => {
     'background only'
     NativeModules?.TamerRouterNativeModule?.registerBackButtonListener?.(dispatchBack)
@@ -99,7 +98,7 @@ export type BackHandlerRootProps = BackHandlerProviderProps
  * `FileRouter` sets this up internally — do not add another `BackHandlerProvider` inside
  * `FileRouter`. For standalone LynxViews (no `FileRouter`), wrap your root component.
  */
-export function BackHandlerProvider({ children, onUnhandled }: BackHandlerProviderProps): JSX.Element {
+export function BackHandlerProvider({ children, onUnhandled }: BackHandlerProviderProps) {
   const registry = useBackHandlerSetup()
   useBackHandlerListeners(registry, onUnhandled)
   return (
@@ -116,31 +115,15 @@ export const BackHandlerRoot = BackHandlerProvider
  * Register a callback that intercepts the hardware/system back event before default handling.
  *
  * Return `true` to consume the event; `false` to let the next handler or (under `FileRouter`) the router run.
- *
- * Registration is **synchronous** (during render via `useMemo`) so the handler is
- * present in the registry before the first paint — this avoids the race where a
- * back press arrives before `useEffect` has fired.
- *
- * @example
- * useBackHandler(() => {
- *   if (modalOpen) { setModalOpen(false); return true }
- *   return false
- * }, modalOpen)
  */
 export function useBackHandler(handler: () => boolean, enabled = true): void {
   const registry = React.useContext(BackHandlerContext)
   const handlerRef = React.useRef(handler)
   handlerRef.current = handler
 
-  // Keep a stable ref to the remove function so cleanup and re-registration
-  // can happen without depending on the handler identity.
   const removeRef = React.useRef<(() => void) | null>(null)
 
-  // Register synchronously during render so the handler is present in the
-  // registry before effects fire — this closes the timing gap where a back
-  // press could arrive between first paint and the first useEffect call.
   React.useMemo(() => {
-    // Clean up previous registration if enabled/registry changed
     if (removeRef.current) {
       removeRef.current()
       removeRef.current = null
@@ -149,8 +132,6 @@ export function useBackHandler(handler: () => boolean, enabled = true): void {
     removeRef.current = registry.add(() => handlerRef.current())
   }, [enabled, registry])
 
-  // Cleanup on unmount only (useMemo doesn't have a cleanup return)
-  // No dependencies — cleanup should only run on unmount, not on state changes
   React.useEffect(() => {
     return () => {
       if (removeRef.current) {

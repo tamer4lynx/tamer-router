@@ -3,14 +3,30 @@ import path from 'path'
 import ts from 'typescript'
 import chokidar from 'chokidar'
 import type { RsbuildPlugin } from '@rsbuild/core'
+import { sortRoutePaths } from './collect-known-route-paths.js'
+import { getOutermostStackFromPath } from './tamer-stacks.js'
 
 type LayoutKind = 'slot' | 'stack' | 'tab' | 'rail'
+
+/** `true` or `{}`: all file routes lazy. `{ eagerPaths }`: lazy except these `routePath` strings (e.g. `['/tabs']` for tab home IFR). */
+export type TamerLazyRoutesOption = boolean | { eagerPaths?: string[] }
 
 interface PluginOptions {
   layoutFilename?: string
   output?: string
+  /** React Router `<Routes>` tree + `TAMER_KNOWN_PATHS_*` (default `node_modules/.tamer-router/_generated_app_routes.tsx`). */
+  appRoutesOutput?: string
+  /** TanStack `routeTree` module; outside `src/` to avoid dev-server watch loops. */
+  routeTreeOutput?: string
+  /** Override path for `TAMER_LAZY_ROUTES` flag module (default `node_modules/.tamer-router/_tamer_lazy_routes_flag.ts`). */
+  lazyFlagOutput?: string
   root: string
   srcAlias?: string
+  /**
+   * Lazy file-route code splitting (`lazy()` + async bundles). `true` / `{}` = all pages lazy; `{ eagerPaths }` keeps
+   * those `routePath` values static (e.g. `['/tabs']` for tab home). Requires `<FileRouter lazyRoutes />` while any page stays lazy.
+   */
+  lazyRoutes?: TamerLazyRoutesOption
 }
 
 interface ParsedScreenDeclaration {
@@ -41,6 +57,7 @@ interface DirectoryNode {
 
 interface PageNode {
   absolutePath: string
+  chunkName: string
   importName: string
   name: string
   routePath: string
@@ -72,6 +89,11 @@ interface GeneratedRouteRecord {
 }
 
 const DEFAULT_OUTPUT = 'node_modules/.tamer-router/_generated_routes.tsx'
+const DEFAULT_APP_ROUTES_OUTPUT = 'node_modules/.tamer-router/_generated_app_routes.tsx'
+const DEFAULT_LAZY_FLAG_OUTPUT = 'node_modules/.tamer-router/_tamer_lazy_routes_flag.ts'
+const DEFAULT_ROUTE_TREE_OUTPUT = 'node_modules/.tamer-router/tamerRouteTree.gen.tsx'
+/** Stable import id for the resolved absolute path to `routeTreeOutput` (see `tamerRouterPlugin` alias). */
+export const TAMER_FILE_ROUTE_TREE_MODULE = 'tamer-file-route-tree'
 const ROUTE_FILE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx'])
 
 function isRouteSourceFile(filename: string, layoutFilename: string): boolean {
@@ -97,6 +119,15 @@ function createLayoutId(relativeDirPath: string): string {
 
 function createRouteId(relativeFilePath: string): string {
   return `route:${relativeFilePath.replace(/\.[^.]+$/, '')}`
+}
+
+function createChunkName(relativeFilePath: string): string {
+  return `tamer-route-${relativeFilePath
+    .replace(/\.[^.]+$/, '')
+    .replace(/\\/g, '/')
+    .replace(/(^|\/)index$/g, '$1index')
+    .replace(/[^a-zA-Z0-9_/-]+/g, '-')
+    .replace(/[/-]+/g, '-')}`
 }
 
 function normalizeImportPath(fromFile: string, toFile: string): string {
@@ -269,6 +300,7 @@ function scanDirectory(
     imports.set(absoluteEntryPath, importName)
     node.pages.push({
       absolutePath: absoluteEntryPath,
+      chunkName: createChunkName(path.relative(process.cwd(), absoluteEntryPath)),
       importName,
       name: pageName,
       routePath: joinRoutePath(basePath, pageName),
@@ -407,6 +439,285 @@ function scoreRoutePath(routePath: string): number {
     .split('/')
     .filter(Boolean)
     .reduce((score, segment) => score + (segment.startsWith('[') ? 8 : 16), 0)
+}
+
+type LayoutAncestry = Array<{ basePath: string; kind: LayoutKind }>
+
+function pageFileToRoutePathProp(pageName: string): string {
+  if (pageName === 'index') return ''
+  if (pageName.startsWith('[') && pageName.endsWith(']')) {
+    return `:${pageName.slice(1, -1)}`
+  }
+  return pageName
+}
+
+function pageFileToStackHandleName(pageName: string): string {
+  if (pageName === 'index') return 'index'
+  return pageName
+}
+
+function outermostStackIdFromAncestry(ancestry: LayoutAncestry): string | null {
+  for (const a of ancestry) {
+    if (a.kind === 'stack' || a.kind === 'tab') {
+      const segs = a.basePath.split('/').filter(Boolean)
+      if (segs[0] === 'tabs' || segs[0] === 'native' || segs[0] === 'm3') {
+        return `/${segs[0]}`
+      }
+    }
+  }
+  return null
+}
+
+function emitRouteHandle(ancestry: LayoutAncestry, pageName: string, omitForRootIndex: boolean): string {
+  if (omitForRootIndex) return ''
+  const outer = outermostStackIdFromAncestry(ancestry)
+  const stackName = pageFileToStackHandleName(pageName)
+  if (outer) {
+    return ` handle={{ tamerOutermostStack: ${JSON.stringify(outer)}, tamerStackName: ${JSON.stringify(stackName)} }}`
+  }
+  return ` handle={{ tamerStackName: ${JSON.stringify(stackName)} }}`
+}
+
+function manifestPathToKnownPath(routePath: string): string {
+  if (routePath === '/') return '/'
+  return (
+    '/' +
+    routePath
+      .split('/')
+      .filter(Boolean)
+      .map((seg) => (seg.startsWith('[') && seg.endsWith(']') ? `:${seg.slice(1, -1)}` : seg))
+      .join('/')
+  )
+}
+
+function buildCoordinatorKnownPaths(allKnown: string[]): string[] {
+  const set = new Set<string>(['/'])
+  for (const p of allKnown) {
+    if (!getOutermostStackFromPath(p)) set.add(p)
+  }
+  set.add('/tabs')
+  set.add('/native')
+  set.add('/m3')
+  return sortRoutePaths([...set])
+}
+
+/** Static path segments must precede `:param` so `/edit` is not captured as `:id`. */
+function sortPagesForRoutes(pages: PageNode[]): PageNode[] {
+  return [...pages].sort((a, b) => {
+    if (a.name === 'index') return -1
+    if (b.name === 'index') return 1
+    const ad = a.name.startsWith('[') ? 1 : 0
+    const bd = b.name.startsWith('[') ? 1 : 0
+    if (ad !== bd) return ad - bd
+    return a.name.localeCompare(b.name)
+  })
+}
+
+function collectPages(node: DirectoryNode, pages: PageNode[] = []): PageNode[] {
+  pages.push(...node.pages)
+  for (const child of node.children) collectPages(child, pages)
+  return pages
+}
+
+function collectLayouts(
+  node: DirectoryNode,
+  layouts: Array<{ absolutePath: string; importName: string }> = [],
+): Array<{ absolutePath: string; importName: string }> {
+  if (node.layout) {
+    layouts.push({
+      absolutePath: node.layout.absolutePath,
+      importName: node.layout.importName,
+    })
+  }
+  for (const child of node.children) collectLayouts(child, layouts)
+  return layouts
+}
+
+function emitDirectoryRoutes(node: DirectoryNode, ancestry: LayoutAncestry, depth: number): string {
+  const pad = '  '.repeat(depth)
+  if (node.layout) {
+    const nextAnc: LayoutAncestry = [
+      ...ancestry,
+      { basePath: node.basePath, kind: node.layout.metadata.kind },
+    ]
+    const innerLines: string[] = []
+    for (const page of sortPagesForRoutes(node.pages)) {
+      const isIndex = page.name === 'index'
+      const pathSeg = pageFileToRoutePathProp(page.name)
+      const handle = emitRouteHandle(nextAnc, page.name, false)
+      if (isIndex) {
+        innerLines.push(`${pad}  <Route index element={<${page.importName} />}${handle} />`)
+      } else {
+        innerLines.push(
+          `${pad}  <Route path=${JSON.stringify(pathSeg)} element={<${page.importName} />}${handle} />`,
+        )
+      }
+    }
+    for (const child of node.children) {
+      innerLines.push(emitDirectoryRoutes(child, nextAnc, depth + 1))
+    }
+    return `${pad}<Route path=${JSON.stringify(node.dirName)} element={<${node.layout.importName} />}>\n${innerLines.join(
+      '\n',
+    )}\n${pad}</Route>`
+  }
+
+  const lines: string[] = []
+  for (const page of sortPagesForRoutes(node.pages)) {
+    const isRoot = ancestry.length === 0
+    const isRootIndex = isRoot && page.name === 'index'
+    if (isRootIndex) {
+      lines.push(`${pad}<Route path="/" element={<${page.importName} />} />`)
+      continue
+    }
+    const pathSeg = pageFileToRoutePathProp(page.name)
+    const handle = emitRouteHandle(ancestry, page.name, false)
+    lines.push(`${pad}<Route path=${JSON.stringify(pathSeg)} element={<${page.importName} />}${handle} />`)
+  }
+  for (const child of node.children) {
+    lines.push(emitDirectoryRoutes(child, ancestry, depth))
+  }
+  return lines.join('\n')
+}
+
+function collectTabStackPaths(layouts: GeneratedLayoutRecord[]): string[] {
+  const paths = new Set<string>()
+  for (const layout of layouts) {
+    if (layout.kind !== 'tab') continue
+    const segs = layout.basePath.split('/').filter(Boolean)
+    if (segs.length === 0) continue
+    const head = `/${segs[0]}`
+    paths.add(head)
+  }
+  return [...paths].sort()
+}
+
+function collectAllStackPaths(layouts: GeneratedLayoutRecord[]): string[] {
+  const paths = new Set<string>()
+  for (const layout of layouts) {
+    if (layout.kind !== 'tab' && layout.kind !== 'stack') continue
+    const segs = layout.basePath.split('/').filter(Boolean)
+    if (segs.length === 0) continue
+    const head = `/${segs[0]}`
+    paths.add(head)
+  }
+  return [...paths].sort()
+}
+
+function normalizeLazyRoutes(lazy: TamerLazyRoutesOption | undefined): {
+  enabled: boolean
+  eagerPaths: Set<string>
+} {
+  if (lazy === true) return { enabled: true, eagerPaths: new Set() }
+  if (lazy && typeof lazy === 'object') {
+    const paths = Array.isArray(lazy.eagerPaths) ? lazy.eagerPaths : []
+    return { enabled: true, eagerPaths: new Set(paths) }
+  }
+  return { enabled: false, eagerPaths: new Set() }
+}
+
+function pageUsesLazyImport(
+  page: PageNode,
+  norm: { enabled: boolean; eagerPaths: Set<string> },
+): boolean {
+  return norm.enabled && !norm.eagerPaths.has(page.routePath)
+}
+
+function generateAppRoutesModule(
+  outputPath: string,
+  rootNode: DirectoryNode,
+  _imports: Map<string, string>,
+  manifest: {
+    layouts: GeneratedLayoutRecord[]
+    routes: GeneratedRouteRecord[]
+  },
+  lazyNorm: { enabled: boolean; eagerPaths: Set<string> },
+): string {
+  const pages = collectPages(rootNode)
+  const anyLazyPage = pages.some((p) => pageUsesLazyImport(p, lazyNorm))
+  const layoutImportLines = collectLayouts(rootNode).map((layout) => {
+    const specifier = normalizeImportPath(outputPath, layout.absolutePath)
+    return `import ${layout.importName} from ${JSON.stringify(specifier)}`
+  })
+  const pageImportLines = pages.map((page) => {
+    const specifier = normalizeImportPath(outputPath, page.absolutePath)
+    return pageUsesLazyImport(page, lazyNorm)
+      ? `const ${page.importName} = lazy(() => import(/* webpackChunkName: ${JSON.stringify(page.chunkName)} */ ${JSON.stringify(specifier)}))`
+      : `import ${page.importName} from ${JSON.stringify(specifier)}`
+  })
+  const lazyImportLine = anyLazyPage ? `import { lazy } from '@lynx-js/react'\n` : ''
+
+  const bodyLines: string[] = []
+  const rootLayoutImport = rootNode.layout?.importName
+  const childIndent = rootLayoutImport ? 4 : 3
+  const childPad = '  '.repeat(childIndent)
+  if (rootLayoutImport) {
+    bodyLines.push(`      <Route path="/" element={<${rootLayoutImport} />}>`)
+  }
+  for (const page of sortPagesForRoutes(rootNode.pages)) {
+    const isRootIndex = page.name === 'index'
+    if (isRootIndex) {
+      if (rootLayoutImport) {
+        bodyLines.push(`${childPad}<Route index element={<${page.importName} />} />`)
+      } else {
+        bodyLines.push(`      <Route path="/" element={<${page.importName} />} />`)
+      }
+      continue
+    }
+    const pathSeg = pageFileToRoutePathProp(page.name)
+    const handle = emitRouteHandle([], page.name, false)
+    bodyLines.push(`${childPad}<Route path=${JSON.stringify(pathSeg)} element={<${page.importName} />}${handle} />`)
+  }
+  for (const child of rootNode.children) {
+    bodyLines.push(emitDirectoryRoutes(child, [], childIndent))
+  }
+  if (rootLayoutImport) {
+    bodyLines.push(`      </Route>`)
+  }
+  bodyLines.push(`      <Route path="*" element={<TamerDefaultNotFound />} />`)
+
+  const allKnown = sortRoutePaths(manifest.routes.map((r) => manifestPathToKnownPath(r.routePath)))
+  const coordinatorKnown = buildCoordinatorKnownPaths(allKnown)
+  const tabStackPaths = collectTabStackPaths(manifest.layouts)
+  const allStackPaths = collectAllStackPaths(manifest.layouts)
+  const coordinatorInitialPath = tabStackPaths[0] ?? '/'
+
+  return `/* eslint-disable */
+// @ts-nocheck
+import { Route, Routes } from 'react-router'
+${lazyImportLine}import { TamerDefaultNotFound, setTabStackPaths, setAllStackPaths, setTamerGeneratedRoutes } from '@tamer4lynx/tamer-router'
+${layoutImportLines.join('\n')}
+${pageImportLines.join('\n')}
+
+export const TAMER_KNOWN_PATHS_FULL = ${JSON.stringify(allKnown, null, 2)}
+
+export const TAMER_KNOWN_PATHS_COORDINATOR = ${JSON.stringify(coordinatorKnown, null, 2)}
+
+/** Alias for full path list (404 helper, deep links). */
+export const TAMER_KNOWN_PATHS = TAMER_KNOWN_PATHS_FULL
+
+/** Top-level paths whose layout kind is tab — never trigger native push. */
+export const TAMER_TAB_STACK_PATHS = ${JSON.stringify(tabStackPaths, null, 2)}
+
+/** All recognized top-level stack paths (tab + stack kind). */
+export const TAMER_ALL_STACK_PATHS = ${JSON.stringify(allStackPaths, null, 2)}
+
+setTabStackPaths(TAMER_TAB_STACK_PATHS)
+setAllStackPaths(TAMER_ALL_STACK_PATHS)
+
+export function TamerGeneratedAppRoutes() {
+  return (
+    <Routes>
+${bodyLines.join('\n')}
+    </Routes>
+  )
+}
+
+setTamerGeneratedRoutes({
+  Routes: TamerGeneratedAppRoutes,
+  knownPaths: TAMER_KNOWN_PATHS,
+  coordinatorInitialPath: ${JSON.stringify(coordinatorInitialPath)},
+})
+`
 }
 
 function routePathToRegex(routePath: string): string {
@@ -597,25 +908,45 @@ function deriveMetaOutputPath(outputPath: string): string {
 }
 
 function ensureGeneratedFiles(options: PluginOptions, appRoot: string): {
+  appRoutesOutputPath: string
+  lazyFlagOutputPath: string
   metaOutputPath: string
   outputPath: string
 } {
   const routesRoot = path.resolve(appRoot, options.root)
   const outputPath = path.resolve(appRoot, options.output ?? DEFAULT_OUTPUT)
+  const appRoutesOutputPath = path.resolve(appRoot, options.appRoutesOutput ?? DEFAULT_APP_ROUTES_OUTPUT)
+  const lazyFlagOutputPath = path.resolve(appRoot, options.lazyFlagOutput ?? DEFAULT_LAZY_FLAG_OUTPUT)
   const metaOutputPath = deriveMetaOutputPath(outputPath)
   const layoutFilename = options.layoutFilename ?? '_layout.tsx'
   const imports = new Map<string, string>()
   const rootNode = scanDirectory(routesRoot, '', layoutFilename, imports)
   const manifest = buildGeneratedRecords(rootNode)
+  const lazyNorm = normalizeLazyRoutes(options.lazyRoutes)
+  const allPages = collectPages(rootNode)
+  const anyPageLazy = allPages.some((p) => pageUsesLazyImport(p, lazyNorm))
   const routeModuleSource = generateRouteModule(outputPath, manifest, imports)
   const metaModuleSource = generateMetaModule(manifest)
+  const appRoutesSource = generateAppRoutesModule(
+    appRoutesOutputPath,
+    rootNode,
+    imports,
+    manifest,
+    lazyNorm,
+  )
+
+  const lazyFlagSource = `/* eslint-disable */\nexport const TAMER_LAZY_ROUTES = ${anyPageLazy}\n`
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   fs.mkdirSync(path.dirname(metaOutputPath), { recursive: true })
+  fs.mkdirSync(path.dirname(appRoutesOutputPath), { recursive: true })
+  fs.mkdirSync(path.dirname(lazyFlagOutputPath), { recursive: true })
   fs.writeFileSync(outputPath, routeModuleSource)
   fs.writeFileSync(metaOutputPath, metaModuleSource)
+  fs.writeFileSync(appRoutesOutputPath, appRoutesSource)
+  fs.writeFileSync(lazyFlagOutputPath, lazyFlagSource)
 
-  return { metaOutputPath, outputPath }
+  return { appRoutesOutputPath, lazyFlagOutputPath, metaOutputPath, outputPath }
 }
 
 function startWatcher(options: PluginOptions, appRoot: string): void {
@@ -642,12 +973,25 @@ function startWatcher(options: PluginOptions, appRoot: string): void {
   })
 }
 
+/**
+ * Emits file-router modules under `node_modules/.tamer-router/`. After changing this package’s source, run `npm run build` in `packages/tamer-router` before building the host app.
+ *
+ * **Lazy routes:** `lazyRoutes: true` (or `{}`) emits async chunks for every file route. Use `lazyRoutes: { eagerPaths: ['/tabs'] }` to keep IFR-sensitive screens in the main bundle while the rest stay lazy. Pass `<FileRouter lazyRoutes />` when any route remains lazy (see `generated-lazy-flag`). IFR snapshot issues may persist on some Lynx builds; try `firstScreenSyncTiming: 'jsReady'` or add more `eagerPaths`.
+ */
 export function tamerRouterPlugin(options: PluginOptions): RsbuildPlugin {
   return {
     name: 'tamer-router',
     setup(api) {
       const appRoot = api.context?.rootPath ?? process.cwd()
-      const { metaOutputPath, outputPath } = ensureGeneratedFiles(options, appRoot)
+      const { appRoutesOutputPath, lazyFlagOutputPath, metaOutputPath, outputPath } = ensureGeneratedFiles(
+        options,
+        appRoot,
+      )
+
+      const routeTreePath = path.resolve(
+        appRoot,
+        options.routeTreeOutput ?? DEFAULT_ROUTE_TREE_OUTPUT,
+      )
 
       api.modifyRsbuildConfig((config) => {
         const alias = (config.resolve?.alias ?? {}) as Record<string, string>
@@ -659,6 +1003,9 @@ export function tamerRouterPlugin(options: PluginOptions): RsbuildPlugin {
               ...alias,
               '@tamer4lynx/tamer-router/generated-routes': outputPath,
               '@tamer4lynx/tamer-router/generated-routes-meta': metaOutputPath,
+              '@tamer4lynx/tamer-router/generated-app-routes': appRoutesOutputPath,
+              '@tamer4lynx/tamer-router/generated-lazy-flag': lazyFlagOutputPath,
+              [TAMER_FILE_ROUTE_TREE_MODULE]: routeTreePath,
             },
           },
         }

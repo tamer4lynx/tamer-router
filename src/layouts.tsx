@@ -1,481 +1,568 @@
-/// <reference types="@lynx-js/react" />
-import * as React from '@lynx-js/react'
-import {
-  AppBar,
-  AppShellRouterContext,
-  type AppShellRouterContextValue,
-  Content,
-  NavigationRail,
-  SafeArea,
-  Screen,
-  TabBar,
-  TabShell,
-} from '@tamer4lynx/tamer-app-shell'
-import type {
-  GeneratedLayoutChild,
-  GeneratedLayoutDefinition,
-  ReactNode,
-  SerializableValue,
-  ScreenOptions,
-} from './types.js'
-import { useThemeColors } from '@tamer4lynx/tamer-system-ui'
-import {
-  asBoolean,
-  asRecord,
-  asString,
-  humanizeRouteName,
-  isTabStripItemActive,
-  mergeScreenOptions,
-  normalizePathname,
-} from './manifest.js'
-import {
-  mergeStyleRecords,
-  mergeTabBarIconColor,
-  resolveLayoutTheme,
-  shellDefaultsFromResolved,
-  type LayoutShellDefaults,
-} from './layoutTheme.js'
-import type { ThemeColors } from '@tamer4lynx/tamer-app-shell'
+import { Suspense, createContext, useCallback, useContext, useEffect, useMemo, useState } from '@lynx-js/react'
+import { Outlet, useLocation } from 'react-router'
+import { AppBar, AppShell, Content, TabBar, type AppShellRouterContextValue, type TabItem } from '@tamer4lynx/tamer-app-shell'
+import { useSystemUI, useThemeColors } from '@tamer4lynx/tamer-system-ui'
+import type { ReactNode } from '@lynx-js/react'
+import { useTamerRouter } from './lynx-file-router.js'
+import { setRegisteredTabRootPaths, tabRootPathsFromOptions } from './tab-layout-roots.js'
+import type { ScreenOptions, TabNavigatorOptions } from './types.js'
 
-const AppShellRouterProvider = AppShellRouterContext.Provider as React.ComponentType<{
-  value: AppShellRouterContextValue
-  children?: ReactNode
-}>
+export { Outlet }
 
-type ReplaceHandler = (route: string, options?: {
-  mode?: string
-  direction?: string
-  tab?: boolean
-  layoutInstanceKey?: string
-}) => void
+const StackOptionsContext = createContext<{
+  register: (name: string, o: ScreenOptions) => void
+  setRuntime: (name: string, o: Partial<ScreenOptions> | null) => void
+  setSlot: (name: string, slot: ReactNode | null) => void
+  unregister: (name: string) => void
+} | null>(null)
 
-interface LayoutRuntimeContextValue {
-  activePath: string
-  activeOptions?: ScreenOptions
-  canGoBack: boolean
-  entryId: string
-  layout: GeneratedLayoutDefinition
-  layoutInstanceKey: string
-  /** Filled by FileRouter for shell content under AppBar / TabBar. */
-  overlayBackgroundColor?: string
-  renderPathBelowLayout: (pathname: string) => ReactNode
-  replace: ReplaceHandler
-  slot: ReactNode
-  titleForPath?: (pathname: string) => string
-  visitedChildPaths: Record<string, string>
-  back: () => void
+const TabOptionsContext = createContext<{
+  register: (name: string, o: ScreenOptions) => void
+  unregister: (name: string) => void
+  setRuntime: (name: string, o: Partial<ScreenOptions> | null) => void
+  pathPrefix: string
+} | null>(null)
+
+type StackComponent = ((props: StackProps) => any) & {
+  Screen: typeof StackScreen
+}
+type TabBaseProps = {
+  pathPrefix?: string
+  children: ReactNode
+} & TabNavigatorOptions
+
+type TabComponent = ((props: TabBaseProps) => any) & {
+  Screen: typeof TabScreen
 }
 
-const LayoutRuntimeContext = React.createContext<LayoutRuntimeContextValue | null>(null)
-
-export interface SlotProps {
-  children?: ReactNode
+/**
+ * Renders the active child route.
+ */
+export function Slot() {
+  return <Outlet />
 }
 
-export interface ScreenDeclaratorProps {
-  name: string
-  options?: ScreenOptions
-  path?: string
-}
+export type { ScreenOptions }
 
-export function Slot(_props: SlotProps): JSX.Element | null {
-  const context = React.useContext(LayoutRuntimeContext)
-  return (context?.slot as JSX.Element | null) ?? null
-}
-
-export const Outlet = Slot
-
-function useLayoutRuntimeContext(componentName: string): LayoutRuntimeContextValue {
-  const context = React.useContext(LayoutRuntimeContext)
-  if (!context) {
-    throw new Error(`${componentName} must be rendered inside FileRouter.`)
-  }
-  return context
-}
-
-function createDeclarator(displayName: string) {
-  function Declarator(_props: ScreenDeclaratorProps): JSX.Element | null {
-    return null
-  }
-
-  Declarator.displayName = displayName
-  return Declarator
-}
-
-function resolveTitle(
-  layout: GeneratedLayoutDefinition,
-  child: GeneratedLayoutChild | undefined,
-  activePath: string,
-  activeOptions: ScreenOptions | undefined,
-  titleForPath?: (pathname: string) => string,
-): string | undefined {
-  return (
-    asString(activeOptions?.title) ??
-    asString(child?.options?.title) ??
-    titleForPath?.(activePath) ??
-    asString(child?.options?.label) ??
-    (child ? humanizeRouteName(child.name) : undefined) ??
-    (layout.basePath === '/' ? 'Home' : undefined)
-  )
-}
-
-function renderShellContent(
-  content: ReactNode,
-  contentStyle: Record<string, unknown> | undefined,
-  shellBackgroundColor?: string,
-  /** Tab/Rail: fill space between chrome without minHeight:100% (which hides sibling TabBar / clips rail). */
-  betweenChrome?: boolean,
-): JSX.Element {
+function ContentFallback({ backgroundColor }: { backgroundColor?: string }) {
   return (
     <view
-      style={{
-        flex: 1,
-        minWidth: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        ...(betweenChrome
-          ? {
-              minHeight: '0px',
-              flexGrow: 1,
-              flexShrink: 1,
-              flexBasis: '0px',
-            }
-          : {
-              maxHeight: '100%',
-              minHeight: '100%',
-            }),
-        ...(shellBackgroundColor !== undefined ? { backgroundColor: shellBackgroundColor } : {}),
-        ...(contentStyle ?? {}),
-      }}
-    >
-      {content as never}
-    </view>
-  )
-}
-
-function renderActiveStripChild(
-  layoutInstanceKey: string,
-  activeChildName: string | undefined,
-  visitedChildPaths: Record<string, string>,
-  renderPathBelowLayout: (pathname: string) => ReactNode,
-): ReactNode {
-  const childPath = activeChildName != null ? visitedChildPaths[activeChildName] : undefined
-  if (activeChildName == null || childPath == null) return null
-  return (
-    <view
-      key={`${layoutInstanceKey}:${activeChildName}`}
       style={{
         flex: 1,
         minHeight: '0px',
-        flexDirection: 'column',
+        width: '100%',
+        backgroundColor,
       }}
-    >
-      {renderPathBelowLayout(childPath) as never}
-    </view>
+    />
   )
 }
 
-export interface LayoutComponentProps {
+/**
+ * Declares stack metadata for a route segment (mirrors React Navigation’s stack screen list).
+ * The actual screen body comes from the matching `<Route>` (`<Outlet />`). Optional `children`
+ * render above the outlet inside the stack scroll area (e.g. per-screen chrome or notices).
+ */
+export function StackScreen({
+  name,
+  options = {},
+  children,
+}: {
+  name: string
+  options?: ScreenOptions
   children?: ReactNode
-  screenOptions?: ScreenOptions
-  titleForPath?: (pathname: string) => string
+}) {
+  const r = useContext(StackOptionsContext)
+  useEffect(() => {
+    r?.register(name, options)
+  }, [r, name, options])
+
+  useEffect(() => {
+    return () => {
+      r?.unregister(name)
+    }
+  }, [r, name])
+
+  useEffect(() => {
+    if (children == null) {
+      r?.setSlot(name, null)
+      return
+    }
+    r?.setSlot(name, children)
+    return () => {
+      r?.setSlot(name, null)
+    }
+  }, [r, name, children])
+
+  return null
 }
 
-function getBackAction(canGoBack: boolean, back: () => void) {
-  if (!canGoBack) return false
-  return { icon: 'arrow_back', onTap: back }
+function pathToStackName(pathname: string, pathPrefix: string): string {
+  const base = pathPrefix.replace(/\/$/, '')
+  if (pathname === base || pathname === `${base}/`) return 'index'
+  if (!pathname.startsWith(base)) return 'index'
+  const sub = pathname.slice(base.length).replace(/^\//, '')
+  if (!sub) return 'index'
+  const seg = sub.split('/')[0]
+  if (!seg) return 'index'
+  return seg
 }
 
-function asThemeColors(value: SerializableValue | undefined): ThemeColors | undefined {
-  if (value == null || typeof value !== 'object' || Array.isArray(value)) return undefined
-  return value as ThemeColors
+function stackScreenKeyForFrame(
+  optionMap: Map<string, ScreenOptions>,
+  pathname: string,
+  pathPrefix: string,
+): string {
+  const key = pathToStackName(pathname, pathPrefix)
+  if (optionMap.has(key)) return key
+  return 'index'
 }
 
-function useAppShellRouterValue(context: LayoutRuntimeContextValue) {
-  return React.useMemo(
+function mergedScreenOptions(
+  nameKey: string,
+  optionMap: Map<string, ScreenOptions>,
+  runtime: Map<string, Partial<ScreenOptions>>,
+): ScreenOptions {
+  return { ...optionMap.get('index'), ...optionMap.get(nameKey), ...runtime.get(nameKey) } as ScreenOptions
+}
+
+function mergedTabScreenOptions(
+  layoutScreenOptions: ScreenOptions | undefined,
+  nameKey: string,
+  optionMap: Map<string, ScreenOptions>,
+  runtime: Map<string, Partial<ScreenOptions>>,
+): ScreenOptions {
+  return {
+    ...layoutScreenOptions,
+    ...optionMap.get('index'),
+    ...optionMap.get(nameKey),
+    ...runtime.get(nameKey),
+  } as ScreenOptions
+}
+
+type StackFrameProps = {
+  pathPrefix: string
+  options: Map<string, ScreenOptions>
+  runtime: Map<string, Partial<ScreenOptions>>
+  slots: Map<string, ReactNode>
+}
+
+function StackFrame({ pathPrefix, options, runtime, slots }: StackFrameProps) {
+  const { pathname } = useLocation()
+  const { back, canGoBack, replace } = useTamerRouter()
+  const colors = useRouterLayoutTheme()
+  useApplyLayoutSystemTheme(colors)
+  const nameKey = useMemo(
+    () => stackScreenKeyForFrame(options, pathname, pathPrefix),
+    [pathname, options, pathPrefix],
+  )
+  const merged = useMemo(
+    () => mergedScreenOptions(nameKey, options, runtime),
+    [nameKey, options, runtime],
+  )
+  const title = merged.title ?? ''
+  const barBg =
+    (typeof merged.headerBackground === 'string' && merged.headerBackground) || colors.surface
+  const showHeader = merged.headerShown !== false
+  const slot = slots.get(nameKey)
+  const router = useMemo<AppShellRouterContextValue>(
     () => ({
-      back: context.back,
-      canGoBack: () => context.canGoBack,
-      replace: context.replace,
+      back: () => back(),
+      canGoBack: () => canGoBack(),
+      replace: (route: string) => {
+        'background only'
+        replace(route)
+      },
     }),
-    [context.back, context.canGoBack, context.replace],
-  )
-}
-
-function useLayoutShellDefaults(): LayoutShellDefaults {
-  const osTheme = useThemeColors()
-  return React.useMemo(() => {
-    const resolved = resolveLayoutTheme(osTheme)
-    return shellDefaultsFromResolved(resolved)
-  }, [osTheme])
-}
-
-export function Stack(props: LayoutComponentProps): JSX.Element {
-  const context = useLayoutRuntimeContext('Stack')
-  const shellDefaults = useLayoutShellDefaults()
-  const appShellRouter = useAppShellRouterValue(context)
-  const activeChild = context.layout.children.find(
-    (child) => context.visitedChildPaths[child.name] === context.activePath,
-  )
-  const mergedOptions = mergeScreenOptions(props.screenOptions, activeChild?.options, context.activeOptions)
-  const headerShown = asBoolean(mergedOptions?.headerShown) !== false
-  const headerStyle = mergeStyleRecords(shellDefaults.headerStyle, asRecord(mergedOptions?.headerStyle))
-  const contentStyle = mergeStyleRecords(shellDefaults.contentStyle, asRecord(mergedOptions?.contentStyle))
-  const headerForegroundColor =
-    asString(mergedOptions?.headerForegroundColor) ?? shellDefaults.headerForegroundColor
-  const headerActionColor = asString(mergedOptions?.actionColor) ?? shellDefaults.actionColor
-  const title = resolveTitle(
-    context.layout,
-    activeChild,
-    context.activePath,
-    context.activeOptions,
-    props.titleForPath,
+    [back, canGoBack, replace],
   )
 
   return (
-    <AppShellRouterProvider value={appShellRouter}>
-      <Screen style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100%' }}>
-        <SafeArea
-          edges={['top', 'bottom', 'left', 'right']}
-          style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100%' }}
-        >
-          {headerShown ? (
-            <AppBar
-              title={title}
-              leftAction={getBackAction(context.canGoBack, context.back)}
-              foregroundColor={headerForegroundColor}
-              actionColor={headerActionColor}
-              style={headerStyle as any}
-            />
-          ) : null}
-          {renderShellContent(context.slot, contentStyle as Record<string, unknown> | undefined, context.overlayBackgroundColor)}
-        </SafeArea>
-      </Screen>
-    </AppShellRouterProvider>
-  )
-}
-
-Stack.Screen = createDeclarator('Stack.Screen')
-
-export function Tab(props: LayoutComponentProps): JSX.Element {
-  const context = useLayoutRuntimeContext('Tab')
-  const shellDefaults = useLayoutShellDefaults()
-  const appShellRouter = useAppShellRouterValue(context)
-  const activeChildName = React.useMemo(() => {
-    const ap = normalizePathname(context.activePath)
-    const found = Object.entries(context.visitedChildPaths).find(
-      ([, pathname]) => normalizePathname(pathname) === ap,
-    )
-    if (found?.[0]) return found[0]
-    const byTarget = context.layout.children.find((c) => normalizePathname(c.targetPath) === ap)
-    return byTarget?.name
-  }, [context.activePath, context.visitedChildPaths, context.layout.children])
-  const handleTabTap = React.useCallback(
-    (targetPath: string) => {
-      if (normalizePathname(targetPath) === normalizePathname(context.activePath)) return
-      context.replace(targetPath, {
-        tab: true,
-        layoutInstanceKey: context.layoutInstanceKey,
-      })
-    },
-    [context.activePath, context.layoutInstanceKey, context.replace],
-  )
-  const activeChild = context.layout.children.find((child) => child.name === activeChildName)
-  const mergedOptions = mergeScreenOptions(props.screenOptions, activeChild?.options, context.activeOptions)
-  const headerShown = asBoolean(mergedOptions?.headerShown) !== false
-  const headerStyle = mergeStyleRecords(shellDefaults.headerStyle, asRecord(mergedOptions?.headerStyle))
-  const contentStyle = mergeStyleRecords(shellDefaults.contentStyle, asRecord(mergedOptions?.contentStyle))
-  const tabBarStyle = mergeStyleRecords(shellDefaults.tabBarStyle, asRecord(mergedOptions?.tabBarStyle))
-  const iconColor = mergeTabBarIconColor(shellDefaults.tabBarIconColor, asRecord(mergedOptions?.iconColor))
-  const headerForegroundColor =
-    asString(mergedOptions?.headerForegroundColor) ?? shellDefaults.headerForegroundColor
-  const headerActionColor = asString(mergedOptions?.actionColor) ?? shellDefaults.actionColor
-  const tabBarChromeHex = asString(mergedOptions?.tabBarChromeHex)
-  const themeColors = asThemeColors(mergedOptions?.themeColors)
-  const title = resolveTitle(
-    context.layout,
-    activeChild,
-    context.activePath,
-    context.activeOptions,
-    props.titleForPath,
-  )
-
-  const activeStripContent = renderActiveStripChild(
-    context.layoutInstanceKey,
-    activeChildName,
-    context.visitedChildPaths,
-    context.renderPathBelowLayout,
-  )
-
-  return (
-    <AppShellRouterProvider value={appShellRouter}>
-      <Screen style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100%' }}>
-        <SafeArea
-          edges={['top', 'bottom', 'left', 'right']}
-          style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100%' }}
-        >
-          {headerShown ? (
-            <AppBar
-              title={title}
-              leftAction={getBackAction(context.canGoBack, context.back)}
-              foregroundColor={headerForegroundColor}
-              actionColor={headerActionColor}
-              style={headerStyle as any}
-            />
-          ) : null}
-          <TabShell
-            tabBar={
-              <TabBar
-                tabs={context.layout.children.map((child) => {
-                  const tabPath = context.visitedChildPaths[child.name] ?? child.targetPath
-                  return {
-                    icon: asString(child.options?.icon) ?? 'home',
-                    label:
-                      asString(child.options?.label) ??
-                      asString(child.options?.title) ??
-                      humanizeRouteName(child.name),
-                    set: asString(child.options?.set) as any,
-                    active: isTabStripItemActive(tabPath, context.activePath, context.layout.basePath),
-                    onTap: () => handleTabTap(tabPath),
-                  }
-                })}
-                iconColor={iconColor as any}
-                style={tabBarStyle as any}
-                tabBarChromeHex={tabBarChromeHex}
-                themeColors={themeColors ?? null}
-              />
-            }
-          >
-            <Content scrollable={false}>
-              {renderShellContent(
-                activeStripContent,
-                contentStyle as Record<string, unknown> | undefined,
-                context.overlayBackgroundColor,
-                true,
-              )}
-            </Content>
-          </TabShell>
-        </SafeArea>
-      </Screen>
-    </AppShellRouterProvider>
-  )
-}
-
-Tab.Screen = createDeclarator('Tab.Screen')
-
-export function Rail(props: LayoutComponentProps): JSX.Element {
-  const context = useLayoutRuntimeContext('Rail')
-  const shellDefaults = useLayoutShellDefaults()
-  const appShellRouter = useAppShellRouterValue(context)
-  const activeChildName = React.useMemo(() => {
-    const ap = normalizePathname(context.activePath)
-    const found = Object.entries(context.visitedChildPaths).find(
-      ([, pathname]) => normalizePathname(pathname) === ap,
-    )
-    if (found?.[0]) return found[0]
-    const byTarget = context.layout.children.find((c) => normalizePathname(c.targetPath) === ap)
-    return byTarget?.name
-  }, [context.activePath, context.visitedChildPaths, context.layout.children])
-  const activeChild = context.layout.children.find((child) => child.name === activeChildName)
-  const mergedOptions = mergeScreenOptions(props.screenOptions, activeChild?.options, context.activeOptions)
-  const headerShown = asBoolean(mergedOptions?.headerShown) !== false
-  const headerStyle = mergeStyleRecords(shellDefaults.headerStyle, asRecord(mergedOptions?.headerStyle))
-  const contentStyle = mergeStyleRecords(shellDefaults.contentStyle, asRecord(mergedOptions?.contentStyle))
-  const railStyle = mergeStyleRecords(shellDefaults.railStyle, asRecord(mergedOptions?.railStyle))
-  const headerForegroundColor =
-    asString(mergedOptions?.headerForegroundColor) ?? shellDefaults.headerForegroundColor
-  const headerActionColor = asString(mergedOptions?.actionColor) ?? shellDefaults.actionColor
-  const title = resolveTitle(
-    context.layout,
-    activeChild,
-    context.activePath,
-    context.activeOptions,
-    props.titleForPath,
-  )
-
-  const activeStripContent = renderActiveStripChild(
-    context.layoutInstanceKey,
-    activeChildName,
-    context.visitedChildPaths,
-    context.renderPathBelowLayout,
-  )
-
-  return (
-    <AppShellRouterProvider value={appShellRouter}>
-      <Screen style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100%' }}>
-        <SafeArea
-          edges={['top', 'bottom', 'left', 'right']}
-          style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '100%' }}
-        >
-          <view
+    <AppShell
+      router={router}
+      backgroundColor={colors.surface}
+      appBar={
+        showHeader ? (
+          <AppBar
+            title={title}
+            foregroundColor={colors.onSurface}
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              flex: 1,
-              minHeight: '0px',
-            }}
-          >
-            {headerShown ? (
-              <AppBar
-                title={title}
-                leftAction={getBackAction(context.canGoBack, context.back)}
-                foregroundColor={headerForegroundColor}
-                actionColor={headerActionColor}
-                style={headerStyle as any}
-              />
-            ) : null}
-            <view style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: '0px' }}>
-              <NavigationRail
-                items={context.layout.children.map((child) => ({
-                  icon: asString(child.options?.icon) ?? 'home',
-                  label:
-                    asString(child.options?.label) ??
-                    asString(child.options?.title) ??
-                    humanizeRouteName(child.name),
-                  value: child.name,
-                  onTap: () => {
-                    const targetPath = context.visitedChildPaths[child.name] ?? child.targetPath
-                    if (normalizePathname(targetPath) === normalizePathname(context.activePath)) return
-                    context.replace(targetPath, {
-                      tab: true,
-                      layoutInstanceKey: context.layoutInstanceKey,
-                    })
-                  },
-                }))}
-                selected={activeChildName}
-                style={{ flexShrink: 0, ...(railStyle as object) } as any}
-              />
-              {renderShellContent(
-                activeStripContent,
-                contentStyle as Record<string, unknown> | undefined,
-                context.overlayBackgroundColor,
-                true,
-              )}
-            </view>
-          </view>
-        </SafeArea>
-      </Screen>
-    </AppShellRouterProvider>
+              backgroundColor: barBg,
+            } as object}
+          />
+        ) : null
+      }
+    >
+      <Content
+        style={{
+          backgroundColor: colors.surface,
+        } as object}
+      >
+        {slot}
+        <Suspense fallback={<ContentFallback backgroundColor={colors.surface} />}>
+          <Outlet />
+        </Suspense>
+      </Content>
+    </AppShell>
   )
 }
 
-Rail.Screen = createDeclarator('Rail.Screen')
+type StackProps = { pathPrefix: string; children: ReactNode }
 
-export const Tabs = Tab
-Tabs.Screen = Tab.Screen
+/**
+ * Stack routes render one app shell around the current stack screen. Native stack pushes create
+ * separate JS contexts, while nested stack routes still resolve their active screen from the path.
+ */
+function StackImpl({ pathPrefix, children }: StackProps) {
+  const [options, setOptions] = useState(() => new Map<string, ScreenOptions>())
+  const [runtime, setRuntimeMap] = useState(() => new Map<string, Partial<ScreenOptions>>())
+  const [slots, setSlots] = useState(() => new Map<string, ReactNode>())
 
-export function useLayoutSlot(): React.ReactNode {
-  const context = React.useContext(LayoutRuntimeContext)
-  return context?.slot ?? null
-}
+  const register = useCallback((name: string, o: ScreenOptions) => {
+    setOptions((prev) => {
+      const next = new Map(prev)
+      next.set(name, o)
+      return next
+    })
+  }, [])
 
-export function withLayoutRuntime<T>(
-  value: LayoutRuntimeContextValue,
-  children: ReactNode,
-): JSX.Element {
+  const unregister = useCallback((name: string) => {
+    setOptions((prev) => {
+      const next = new Map(prev)
+      next.delete(name)
+      return next
+    })
+    setSlots((prev) => {
+      const next = new Map(prev)
+      next.delete(name)
+      return next
+    })
+  }, [])
+
+  const setSlot = useCallback((name: string, slot: ReactNode | null) => {
+    setSlots((prev) => {
+      const next = new Map(prev)
+      if (slot == null) next.delete(name)
+      else next.set(name, slot)
+      return next
+    })
+  }, [])
+
+  const setRuntime = useCallback((name: string, o: Partial<ScreenOptions> | null) => {
+    setRuntimeMap((prev) => {
+      const next = new Map(prev)
+      if (o == null) next.delete(name)
+      else next.set(name, o)
+      return next
+    })
+  }, [])
+
+  const value = useMemo(
+    () => ({ register, setRuntime, setSlot, unregister }),
+    [register, setRuntime, setSlot, unregister],
+  )
+
   return (
-    <LayoutRuntimeContext.Provider value={value}>
-      {children}
-    </LayoutRuntimeContext.Provider>
+    <StackOptionsContext.Provider value={value}>
+      {children as any}
+      <StackFrame pathPrefix={pathPrefix} options={options} runtime={runtime} slots={slots} />
+    </StackOptionsContext.Provider>
   )
+}
+
+export const Stack = StackImpl as StackComponent
+Stack.Screen = StackScreen
+
+export function TabScreen({ name, options = {} }: { name: string; options?: ScreenOptions }) {
+  const r = useContext(TabOptionsContext)
+  useEffect(() => {
+    r?.register(name, options)
+    return () => {
+      r?.unregister(name)
+    }
+  }, [r, name, options])
+  return null
+}
+
+type LayoutTheme = {
+  primary?: string
+  primaryDark?: string
+  background?: string
+  surface?: string
+  surfaceContainer?: string
+  onSurface?: string
+  onSurfaceVariant?: string
+  secondaryContainer?: string
+  onSecondaryContainer?: string
+  isDark?: boolean
+}
+
+const FALLBACK_THEME: LayoutTheme = {
+  surface: '#121212',
+  surfaceContainer: '#1e1e1e',
+  primary: '#000000',
+  primaryDark: '#000000',
+  background: '#121212',
+  onSurface: '#ffffff',
+  onSurfaceVariant: '#b0b0b0',
+  secondaryContainer: '#1a3538',
+  onSecondaryContainer: '#80cbc4',
+  isDark: true,
+}
+
+const LIGHT_FALLBACK: LayoutTheme = {
+  surface: '#f5f5f5',
+  surfaceContainer: '#e8e8e8',
+  primary: '#007aff',
+  primaryDark: '#0051d5',
+  background: '#ffffff',
+  onSurface: '#000000',
+  onSurfaceVariant: '#6b6b6b',
+  secondaryContainer: '#cce8e5',
+  onSecondaryContainer: '#005f5a',
+  isDark: false,
+}
+
+function resolveLayoutTheme(theme: LayoutTheme | null | undefined): LayoutTheme {
+  if (theme == null) return LIGHT_FALLBACK
+  return {
+    surface: theme.surface ?? FALLBACK_THEME.surface,
+    surfaceContainer: theme.surfaceContainer ?? FALLBACK_THEME.surfaceContainer,
+    primary: theme.primary ?? FALLBACK_THEME.primary,
+    primaryDark: theme.primaryDark ?? FALLBACK_THEME.primaryDark,
+    background: theme.background ?? FALLBACK_THEME.background,
+    onSurface: theme.onSurface ?? FALLBACK_THEME.onSurface,
+    onSurfaceVariant: theme.onSurfaceVariant ?? FALLBACK_THEME.onSurfaceVariant,
+    secondaryContainer: theme.secondaryContainer ?? FALLBACK_THEME.secondaryContainer,
+    onSecondaryContainer: theme.onSecondaryContainer ?? FALLBACK_THEME.onSecondaryContainer,
+    isDark: theme.isDark ?? FALLBACK_THEME.isDark,
+  }
+}
+
+function useRouterLayoutTheme() {
+  const osTheme = useThemeColors()
+  return resolveLayoutTheme(osTheme)
+}
+
+function useApplyLayoutSystemTheme(colors: LayoutTheme) {
+  const { setStatusBar, setNavigationBar } = useSystemUI()
+
+  useEffect(() => {
+    'background only'
+    setStatusBar({ color: colors.surface, style: colors.isDark ? 'light' : 'dark' })
+    setNavigationBar({ color: colors.surfaceContainer ?? '#000000', style: colors.isDark ? 'light' : 'dark' })
+  }, [colors.surface, colors.surfaceContainer, colors.isDark, setStatusBar, setNavigationBar])
+}
+
+/**
+ * Tab routes: top `AppBar` + bottom `TabBar` by default, active `<Tab.Screen>` content in between.
+ * Use `headerShown: false` on `<Tab />` or per-screen `options` to hide the app bar, `tabBarShown: false` to hide the tab bar.
+ */
+function TabImpl({
+  pathPrefix = '/tabs',
+  children,
+  screenOptions: layoutScreenOptions,
+  headerShown: navigatorHeaderShown = true,
+  tabBarShown = true,
+  appShellBackgroundColor,
+  safeAreaEdges,
+  tabBarOptions,
+}: TabBaseProps) {
+  const [options, setOptions] = useState(() => new Map<string, ScreenOptions>())
+  const [runtime, setRuntimeMap] = useState(() => new Map<string, Partial<ScreenOptions>>())
+
+  const register = useCallback((name: string, o: ScreenOptions) => {
+    setOptions((prev) => {
+      const next = new Map(prev)
+      next.set(name, o)
+      return next
+    })
+  }, [])
+
+  const unregister = useCallback((name: string) => {
+    setOptions((prev) => {
+      const next = new Map(prev)
+      next.delete(name)
+      return next
+    })
+  }, [])
+
+  const setRuntime = useCallback((name: string, o: Partial<ScreenOptions> | null) => {
+    setRuntimeMap((prev) => {
+      const next = new Map(prev)
+      if (o == null) next.delete(name)
+      else next.set(name, o)
+      return next
+    })
+  }, [])
+
+  const rctx = useMemo(
+    () => ({ register, unregister, setRuntime, pathPrefix }),
+    [register, unregister, setRuntime, pathPrefix],
+  )
+
+  useEffect(() => {
+    setRegisteredTabRootPaths(tabRootPathsFromOptions(pathPrefix, options))
+    return () => {
+      setRegisteredTabRootPaths(null)
+    }
+  }, [pathPrefix, options])
+
+  const loc = useLocation()
+  const { navigate, back, canGoBack, replace } = useTamerRouter()
+  const colors = useRouterLayoutTheme()
+  useApplyLayoutSystemTheme(colors)
+  const path = loc.pathname
+  const base = pathPrefix.replace(/\/$/, '')
+
+  const nameKey = useMemo(
+    () => pathToStackName(path, pathPrefix),
+    [path, pathPrefix],
+  )
+
+  const merged = useMemo(
+    () => mergedTabScreenOptions(layoutScreenOptions, nameKey, options, runtime),
+    [layoutScreenOptions, nameKey, options, runtime],
+  )
+
+  const title = merged.title ?? ''
+  const barBg =
+    (typeof merged.headerBackground === 'string' && merged.headerBackground) || colors.surface
+  const showAppBar = navigatorHeaderShown && merged.headerShown !== false
+  const shellBg = appShellBackgroundColor ?? colors.surface
+
+  // Tab routes are always JS-swapped within the same bundle. Never native push.
+  const tabs: TabItem[] = useMemo(() => {
+    const items: TabItem[] = []
+    for (const [n, o] of options) {
+      const homeHref = base || '/'
+      const href = n === 'index' ? homeHref : base ? `${base}/${n}` : `/${n}`
+      const isIndex = n === 'index'
+      const active = isIndex
+        ? (path === base || path === `${base}/` || (base === '' && (path === '/' || path === '')))
+        : path === href || path.startsWith(`${href}/`)
+      const tabLabel = (typeof o.label === 'string' && o.label) || o.title
+      items.push({
+        label: tabLabel,
+        icon: (o.icon as string) || '',
+        set: o.set as TabItem['set'],
+        active,
+        onTap: () => {
+          'background only'
+          navigate(href, { replace: true })
+        },
+      })
+    }
+    return items
+  }, [options, path, base, navigate])
+
+  const defaultTabBarIcon = {
+    active: colors.onSecondaryContainer,
+    inactive: colors.onSurfaceVariant,
+    labelActive: colors.onSurface,
+    labelInactive: colors.onSurfaceVariant,
+    pill: colors.secondaryContainer,
+  }
+
+  const tabBar = tabBarShown ? (
+    <TabBar
+      tabs={tabs}
+      style={{
+        backgroundColor: colors.surfaceContainer,
+        ...(tabBarOptions?.style as object | undefined),
+      } as object}
+      iconColor={tabBarOptions?.iconColor ?? defaultTabBarIcon}
+      tabBarChromeHex={tabBarOptions?.tabBarChromeHex}
+      themeColors={tabBarOptions?.themeColors}
+    />
+  ) : null
+
+  const router = useMemo<AppShellRouterContextValue>(
+    () => ({
+      back: () => back(),
+      canGoBack: () => canGoBack(),
+      replace: (route: string) => {
+        'background only'
+        replace(route)
+      },
+    }),
+    [back, canGoBack, replace],
+  )
+
+  return (
+    <TabOptionsContext.Provider value={rctx}>
+      <AppShell
+        router={router}
+        backgroundColor={shellBg}
+        safeAreaEdges={safeAreaEdges}
+        appBar={
+          showAppBar ? (
+            <AppBar
+              title={title}
+              foregroundColor={colors.onSurface}
+              style={{
+                backgroundColor: barBg,
+              } as object}
+            />
+          ) : null
+        }
+        tabBar={tabBar}
+      >
+        {children as any}
+        <Content scrollable={false} style={{ backgroundColor: shellBg } as object}>
+          <Suspense fallback={<ContentFallback backgroundColor={shellBg} />}>
+            <Outlet />
+          </Suspense>
+        </Content>
+      </AppShell>
+    </TabOptionsContext.Provider>
+  )
+}
+
+export const Tab = TabImpl as TabComponent
+Tab.Screen = TabScreen
+
+type TabsProps = { pathPrefix: string; children: ReactNode } & TabNavigatorOptions
+
+export function Tabs({ pathPrefix, children, ...tabNavigatorRest }: TabsProps) {
+  return (
+    <Tab pathPrefix={pathPrefix} {...tabNavigatorRest}>
+      {children}
+    </Tab>
+  )
+}
+
+/** Merge per-screen `title` (and other options later) for the current route inside `Stack`. */
+export function useScreenOptions(partial: Partial<ScreenOptions>) {
+  const r = useContext(StackOptionsContext)
+  const { pathname } = useLocation()
+  const nameKey = pathToStackName(pathname, '/')
+  const patchKey = useMemo(() => JSON.stringify(partial), [partial])
+
+  useEffect(() => {
+    if (!r?.setRuntime || !nameKey) return
+    r.setRuntime(nameKey, JSON.parse(patchKey) as Partial<ScreenOptions>)
+    return () => {
+      r.setRuntime(nameKey, null)
+    }
+  }, [r, nameKey, patchKey])
+}
+
+/** Runtime overlay for the active `<Tab.Screen>` (use inside tab layout routes; requires parent `<Tab>`). */
+export function useTabScreenOptions(partial: Partial<ScreenOptions>) {
+  const r = useContext(TabOptionsContext)
+  const { pathname } = useLocation()
+  const pathPrefix = r?.pathPrefix ?? '/'
+  const nameKey = useMemo(
+    () => pathToStackName(pathname, pathPrefix),
+    [pathname, pathPrefix],
+  )
+  const patchKey = useMemo(() => JSON.stringify(partial), [partial])
+
+  useEffect(() => {
+    if (!r?.setRuntime || !nameKey) return
+    r.setRuntime(nameKey, JSON.parse(patchKey) as Partial<ScreenOptions>)
+    return () => {
+      r.setRuntime(nameKey, null)
+    }
+  }, [r, nameKey, patchKey])
 }

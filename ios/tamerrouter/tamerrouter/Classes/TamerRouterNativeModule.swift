@@ -4,7 +4,7 @@ import Lynx
 
 /// Host wiring only: `tamer-router:back` + `didHandleBack`, and JS history persistence.
 /// One back event in flight until JS calls `didHandleBack` (React Native BackHandler–style).
-/// Stack visuals are owned by `nav-screen` (`tamer-navigation`), not this module.
+/// Stack depth is coordinated by `FileRouter` + `TamerNav` (`tamer-navigation`), not this module.
 @objcMembers
 public final class TamerRouterNativeModule: NSObject, LynxModule {
 
