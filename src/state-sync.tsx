@@ -4,7 +4,9 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type ReactNode,
 } from '@lynx-js/react'
 import { TamerNav, readHydratedStateJson, subscribeHydratedStateJson } from '@tamer4lynx/tamer-navigation'
 import type { CoordinatorNavDispatchAction, TamerStateSync, TamerStateSyncProviderProps } from './types.js'
@@ -42,6 +44,19 @@ function parseAggregateStateJson(json: string, syncs: TamerStateSync[]): void {
   }
 }
 
+function parseSyncPayload(sync: TamerStateSync): unknown {
+  try {
+    return JSON.parse(sync.serialize() || '{}') as unknown
+  } catch {
+    return {}
+  }
+}
+
+export function readActiveTamerStateJson(fallback = '{}'): string {
+  const list = activeSyncs
+  return list?.length ? aggregateStateJson(list) : fallback
+}
+
 /**
  * Build a `TamerStateSync` for any store that exposes getState, subscribe, hydrate, and optional send.
  */
@@ -69,36 +84,53 @@ export function createTamerStateSync(
   }
 }
 
-/**
- * Wires `stateJson` ↔ host for named slices. Wrap your app’s own provider tree as `children`
- * (e.g. React context, hand-rolled store); this component only syncs the slices you pass in `syncs`.
- */
-export function TamerStateSyncProvider({ syncs, providers, children }: TamerStateSyncProviderProps) {
+export const createTamerProviderConnector = createTamerStateSync
+
+export function useTamerStateSyncEngine(
+  providerConnector?: TamerStateSync[],
+  options: { dispatchConnectorMutations?: boolean } = {},
+) {
   const [snap, setSnap] = useState<Record<string, unknown>>(() => ({}))
-  const syncList = useMemo(
-    () => (syncs && syncs.length > 0 ? syncs : (providers ?? [])),
-    [syncs, providers],
-  )
+  const isHydrating = useRef(false)
+  const syncList = useMemo(() => providerConnector ?? [], [providerConnector])
+  const dispatchConnectorMutations = options.dispatchConnectorMutations === true
 
   const refresh = useCallback(() => {
+    if (syncList.length === 0) {
+      setSnap({})
+      return
+    }
     const next: Record<string, unknown> = {}
     for (const s of syncList) {
-      try {
-        next[s.key] = JSON.parse(s.serialize() || '{}') as unknown
-      } catch {
-        next[s.key] = {}
-      }
+      next[s.key] = parseSyncPayload(s)
     }
     setSnap(next)
   }, [syncList])
 
   useEffect(() => {
+    if (syncList.length === 0) {
+      activeSyncs = null
+      setSnap({})
+      return
+    }
     activeSyncs = syncList
     const unsubs: Array<() => void> = []
     for (const s of syncList) {
       unsubs.push(
         s.subscribe(() => {
           refresh()
+          if (isHydrating.current) return
+          if (dispatchConnectorMutations) {
+            TamerNav.dispatch({
+              type: 'shared-context-mutate',
+              payloadJson: JSON.stringify({
+                tamerSyncKey: s.key,
+                type: '@@tamer/HYDRATE',
+                payload: parseSyncPayload(s),
+              }),
+            })
+            return
+          }
           const stateJson = aggregateStateJson(syncList)
           TamerNav.update({ stateJson })
         }),
@@ -108,15 +140,26 @@ export function TamerStateSyncProvider({ syncs, providers, children }: TamerStat
       activeSyncs = null
       for (const u of unsubs) u()
     }
-  }, [syncList, refresh])
+  }, [dispatchConnectorMutations, syncList, refresh])
 
   useEffect(() => {
     'background only'
+    if (syncList.length === 0) return
     const json = readHydratedStateJson('{}')
-    parseAggregateStateJson(json, syncList)
+    isHydrating.current = true
+    try {
+      parseAggregateStateJson(json, syncList)
+    } finally {
+      isHydrating.current = false
+    }
     refresh()
     return subscribeHydratedStateJson((j) => {
-      parseAggregateStateJson(j, syncList)
+      isHydrating.current = true
+      try {
+        parseAggregateStateJson(j, syncList)
+      } finally {
+        isHydrating.current = false
+      }
       refresh()
     })
   }, [syncList, refresh])
@@ -128,8 +171,35 @@ export function TamerStateSyncProvider({ syncs, providers, children }: TamerStat
     [snap],
   )
 
+  return useMemo(() => ({ getSnapshot }), [getSnapshot])
+}
+
+export function TamerStateSyncEngineProvider({
+  providerConnector,
+  dispatchConnectorMutations,
+  children,
+}: {
+  providerConnector?: TamerStateSync[]
+  dispatchConnectorMutations?: boolean
+  children: ReactNode
+}) {
+  const value = useTamerStateSyncEngine(providerConnector, { dispatchConnectorMutations })
   return (
-    <StateSyncContext.Provider value={{ getSnapshot }}>{children as any}</StateSyncContext.Provider>
+    <StateSyncContext.Provider value={value}>{children as any}</StateSyncContext.Provider>
+  )
+}
+
+/**
+ * @deprecated Prefer <FileRouter providerConnector={...} /> for React-tree-bound state.
+ * Module-level stores such as Redux, Zustand, and MobX should normally rely on the shared
+ * LynxGroup singleton runtime and do not need this JSON bridge.
+ */
+export function TamerStateSyncProvider({ syncs, providers, children }: TamerStateSyncProviderProps) {
+  const syncList = syncs && syncs.length > 0 ? syncs : providers
+  return (
+    <TamerStateSyncEngineProvider providerConnector={syncList}>
+      {children as any}
+    </TamerStateSyncEngineProvider>
   )
 }
 
@@ -138,12 +208,48 @@ export function useTamerStateSnapshot(key: string): unknown {
   return ctx?.getSnapshot(key)
 }
 
-export function sendTamerState(key: string, action: unknown): void {
+function sendLocalTamerState(key: string, action: unknown): void {
   'background only'
   const list = activeSyncs
   if (!list) return
   const s = list.find((x) => x.key === key)
   s?.send?.(action)
+}
+
+function applyLocalTamerConnectorAction(key: string, action: Record<string, unknown>): void {
+  'background only'
+  const list = activeSyncs
+  if (!list) return
+  const s = list.find((x) => x.key === key)
+  if (!s) return
+  if (action.type === '@@tamer/HYDRATE' && 'payload' in action) {
+    try {
+      s.hydrate(JSON.stringify(action.payload))
+    } catch {
+      // ignore invalid connector payloads
+    }
+    return
+  }
+  s.send?.(action)
+}
+
+function createConnectorMutationPayload(key: string, action: unknown): Record<string, unknown> {
+  if (action && typeof action === 'object' && !Array.isArray(action)) {
+    return { tamerSyncKey: key, ...(action as Record<string, unknown>) }
+  }
+  return { tamerSyncKey: key, payload: action }
+}
+
+export function sendTamerState(key: string, action: unknown): void {
+  'background only'
+  try {
+    TamerNav.dispatch({
+      type: 'shared-context-mutate',
+      payloadJson: JSON.stringify(createConnectorMutationPayload(key, action)),
+    })
+  } catch {
+    sendLocalTamerState(key, action)
+  }
 }
 
 export function applyDefaultCoordinatorNavDispatch(action: CoordinatorNavDispatchAction): void {
@@ -160,7 +266,7 @@ export function applyDefaultCoordinatorNavDispatch(action: CoordinatorNavDispatc
   const key = data.tamerSyncKey
   if (typeof key === 'string') {
     const { tamerSyncKey: _k, ...rest } = data
-    sendTamerState(key, rest)
+    applyLocalTamerConnectorAction(key, rest)
     return
   }
   if (list.length === 1) {

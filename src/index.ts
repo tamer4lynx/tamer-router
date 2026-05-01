@@ -34,14 +34,16 @@ export type {
 export {
   TamerStateSyncProvider,
   createTamerStateSync,
+  createTamerProviderConnector,
   useTamerStateSnapshot,
   sendTamerState,
   applyDefaultCoordinatorNavDispatch,
+  useTamerStateSyncEngine,
   FileRouterBridgesProvider,
   useTamerProviderSnapshot,
   dispatchProviderMutation,
 } from './state-sync.js'
-export type { TamerStateSync, TamerStateSyncProviderProps } from './types.js'
+export type { TamerProviderConnector, TamerStateSync, TamerStateSyncProviderProps } from './types.js'
 export { TamerDefaultNotFound } from './default-not-found.js'
 export { sortRoutePaths, sortRoutePaths as collectKnownRoutePaths } from './collect-known-route-paths.js'
 export { useTamerLynxFileRouter, TamerLynxFileRouterContext } from './tamer-lynx-context.js'

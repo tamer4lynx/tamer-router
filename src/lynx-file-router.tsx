@@ -17,7 +17,11 @@ import { parseCoordinatorNavDispatchPayload } from './coordinator-dispatch.js'
 import { TAMER_LAZY_ROUTES } from '@tamer4lynx/tamer-router/generated-lazy-flag'
 import { getTamerGeneratedRoutes } from './generated-routes-registry.js'
 import { TamerLynxFileRouterContext } from './tamer-lynx-context.js'
-import { applyDefaultCoordinatorNavDispatch } from './state-sync.js'
+import {
+  applyDefaultCoordinatorNavDispatch,
+  readActiveTamerStateJson,
+  TamerStateSyncEngineProvider,
+} from './state-sync.js'
 import { getOutermostStackFromPath, shouldNativePush } from './tamer-stacks.js'
 import { shouldCoerceTabReplace } from './tab-layout-roots.js'
 import type { FileRouterProps, TamerOutermostStack } from './types.js'
@@ -31,6 +35,7 @@ type FileRouterShellRef = {
   exitOnRootHardwareBack: boolean
   extraChild?: ReactNode
   onNavDispatch?: FileRouterProps['onNavDispatch']
+  providerConnector?: FileRouterProps['providerConnector']
 }
 
 export const KnownRoutePathsContext: Context<string[] | undefined> = createContext<string[] | undefined>(
@@ -160,7 +165,7 @@ function TamerNavigateContext({
   const coordinatorPush = useCallback(
     (to: string, replace: boolean) => {
       'background only'
-      const stateJson = readHydratedStateJson('{}')
+      const stateJson = readActiveTamerStateJson(readHydratedStateJson('{}'))
       const screenId = `${to}-${pushCounter.current++}`
       TamerNav.push({
         src: bundleSrc,
@@ -321,16 +326,21 @@ function FileRouterMemoryBody({
 }) {
   const s = shellRef.current
   return (
-    <KnownRoutePathsContext.Provider value={knownPaths}>
-      <TamerNavigateContext
-        bundleSrc={s.bundleSrc}
-        spokeMode={s.spokeMode}
-        spokeRootStack={s.spokeRootStack}
-        shellRef={shellRef}
-      >
-        {children as any}
-      </TamerNavigateContext>
-    </KnownRoutePathsContext.Provider>
+    <TamerStateSyncEngineProvider
+      providerConnector={s.providerConnector}
+      dispatchConnectorMutations={s.spokeMode}
+    >
+      <KnownRoutePathsContext.Provider value={knownPaths}>
+        <TamerNavigateContext
+          bundleSrc={s.bundleSrc}
+          spokeMode={s.spokeMode}
+          spokeRootStack={s.spokeRootStack}
+          shellRef={shellRef}
+        >
+          {children as any}
+        </TamerNavigateContext>
+      </KnownRoutePathsContext.Provider>
+    </TamerStateSyncEngineProvider>
   )
 }
 
@@ -356,6 +366,7 @@ export function FileRouterInner({
   knownPaths,
   basename = '',
   onNavDispatch,
+  providerConnector,
   coordinatorInitialPath = '/',
   lazyRoutes,
 }: FileRouterProps & { children: ReactNode; coordinatorInitialPath?: string }) {
@@ -371,6 +382,7 @@ export function FileRouterInner({
     spokeRootStack,
     exitOnRootHardwareBack,
     onNavDispatch,
+    providerConnector,
   })
   shellRef.current = {
     bundleSrc,
@@ -378,6 +390,7 @@ export function FileRouterInner({
     spokeRootStack,
     exitOnRootHardwareBack,
     onNavDispatch,
+    providerConnector,
   }
 
   const initialEntry = spokeMode

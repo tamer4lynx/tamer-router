@@ -66,9 +66,12 @@ export type TabNavigatorOptions = {
 }
 
 /**
- * A named slice of app state for `TamerNav` JSON sync. Use with your own
- * `Context.Provider` (or any store) as `children` of `TamerStateSyncProvider` —
- * the router does not ship store-specific helpers.
+ * A named slice of React-tree-bound state for `TamerNav` JSON sync.
+ *
+ * Module-level stores such as Redux, Zustand, MobX, and XState normally do not need this:
+ * Tamer stack spokes share the root LynxGroup, so imported store singletons stay in shared JS
+ * memory. Use this connector only for state trapped inside a React provider/root boundary or
+ * for custom bridge-required state.
  */
 export type TamerStateSync = {
   key: string
@@ -78,6 +81,8 @@ export type TamerStateSync = {
   /** Optional: handle opaque actions (e.g. from another bundle / native). */
   send?: (action: unknown) => void
 }
+
+export type TamerProviderConnector = TamerStateSync
 
 export type TamerStateSyncProviderProps = {
   children: ReactNode
@@ -110,9 +115,15 @@ export type FileRouterProps = {
   notFoundComponent?: (() => ReactNode) | React.ComponentType
   /**
    * Coordinator only: invoked for each parsed `tamer-nav:dispatch` before the built-in
-   * `shared-context-mutate` → `TamerStateSyncProvider` bridge (see `applyDefaultCoordinatorNavDispatch`).
+   * `shared-context-mutate` → provider connector bridge (see `applyDefaultCoordinatorNavDispatch`).
    */
   onNavDispatch?: (action: CoordinatorNavDispatchAction) => void
+  /**
+   * Optional bridge connectors for React Context / hook-bound state that must cross native
+   * LynxView roots. Do not use this for normal module-level Redux, Zustand, MobX, or XState
+   * stores; those should rely on the shared LynxGroup singleton runtime.
+   */
+  providerConnector?: TamerProviderConnector[]
 }
 
 /** Manifest shape emitted by `tamerRouterPlugin` into `generated-routes`. */
