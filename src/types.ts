@@ -18,6 +18,13 @@ export type ScreenOptions = {
   set?: string
   /** App bar / stack header background (hex or Lynx color). */
   headerBackground?: string
+  /**
+   * Scaffold color for the stack/tab shell (`AppShell`, `Content`, lazy `Suspense` fallback)
+   * before route content paints. Defaults to theme `background` from `@tamer4lynx/tamer-system-ui`
+   * (see `ThemeColors.background`). Set on `<Stack screenOptions />`, `<Stack.Screen options />`,
+   * or `useScreenOptions({ contentBackgroundColor })`.
+   */
+  contentBackgroundColor?: string
   [key: string]: unknown
 }
 
@@ -57,12 +64,17 @@ export type TabNavigatorOptions = {
    * @default true
    */
   tabBarShown?: boolean
-  /** `AppShell` background (replaces the default theme `surface` when set). */
+  /** `AppShell` background — overrides `contentBackgroundColor` / theme when set. */
   appShellBackgroundColor?: string
   /** Forwarded to `AppShell` `SafeArea` (default: all edges). */
   safeAreaEdges?: Array<'top' | 'right' | 'bottom' | 'left'>
   /** Bottom tab bar: style, `iconColor`, and related chrome. */
   tabBarOptions?: TabBarChromeOptions
+  /**
+   * Window scaffold behind tab content when neither `appShellBackgroundColor` nor the active
+   * screen’s `contentBackgroundColor` is set. Defaults to theme `background` from system UI.
+   */
+  contentBackgroundColor?: string
 }
 
 /**

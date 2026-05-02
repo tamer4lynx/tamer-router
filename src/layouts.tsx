@@ -1,7 +1,7 @@
 import { Suspense, createContext, useCallback, useContext, useEffect, useMemo, useState } from '@lynx-js/react'
 import { Outlet, useLocation } from 'react-router'
 import { AppBar, AppShell, Content, TabBar, type AppShellRouterContextValue, type TabItem } from '@tamer4lynx/tamer-app-shell'
-import { useSystemUI, useThemeColors } from '@tamer4lynx/tamer-system-ui'
+import { readBootstrapThemeColors, useSystemUI, useThemeColors } from '@tamer4lynx/tamer-system-ui'
 import type { ReactNode } from '@lynx-js/react'
 import { useTamerRouter } from './lynx-file-router.js'
 import { setRegisteredTabRootPaths, tabRootPathsFromOptions } from './tab-layout-roots.js'
@@ -176,6 +176,11 @@ function mergedTabScreenOptions(
   } as ScreenOptions
 }
 
+function pickContentBackgroundColor(o: ScreenOptions | undefined): string | undefined {
+  const raw = o?.contentBackgroundColor
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : undefined
+}
+
 type StackFrameProps = {
   pathPrefix: string
   screenOptions?: ScreenOptions
@@ -202,6 +207,7 @@ function StackFrame({ pathPrefix, screenOptions, options, runtime, slots }: Stac
     [screenOptions, nameKey, runtimeKey, options, runtime],
   )
   const title = merged.title ?? ''
+  const contentBg = pickContentBackgroundColor(merged) ?? colors.background
   const barBg =
     (typeof merged.headerBackground === 'string' && merged.headerBackground) || colors.surface
   const showHeader = merged.headerShown !== false
@@ -221,7 +227,7 @@ function StackFrame({ pathPrefix, screenOptions, options, runtime, slots }: Stac
   return (
     <AppShell
       router={router}
-      backgroundColor={colors.surface}
+      backgroundColor={contentBg}
       appBar={
         showHeader ? (
           <AppBar
@@ -236,11 +242,11 @@ function StackFrame({ pathPrefix, screenOptions, options, runtime, slots }: Stac
     >
       <Content
         style={{
-          backgroundColor: colors.surface,
+          backgroundColor: contentBg,
         } as object}
       >
         {slot}
-        <Suspense fallback={<ContentFallback backgroundColor={colors.surface} />}>
+        <Suspense fallback={<ContentFallback backgroundColor={contentBg} />}>
           <Outlet />
         </Suspense>
       </Content>
@@ -365,21 +371,8 @@ const FALLBACK_THEME: LayoutTheme = {
   isDark: true,
 }
 
-const LIGHT_FALLBACK: LayoutTheme = {
-  surface: '#f5f5f5',
-  surfaceContainer: '#e8e8e8',
-  primary: '#007aff',
-  primaryDark: '#0051d5',
-  background: '#ffffff',
-  onSurface: '#000000',
-  onSurfaceVariant: '#6b6b6b',
-  secondaryContainer: '#cce8e5',
-  onSecondaryContainer: '#005f5a',
-  isDark: false,
-}
-
 function resolveLayoutTheme(theme: LayoutTheme | null | undefined): LayoutTheme {
-  if (theme == null) return LIGHT_FALLBACK
+  if (theme == null) return FALLBACK_THEME
   return {
     surface: theme.surface ?? FALLBACK_THEME.surface,
     surfaceContainer: theme.surfaceContainer ?? FALLBACK_THEME.surfaceContainer,
@@ -396,7 +389,7 @@ function resolveLayoutTheme(theme: LayoutTheme | null | undefined): LayoutTheme 
 
 function useRouterLayoutTheme() {
   const osTheme = useThemeColors()
-  return resolveLayoutTheme(osTheme)
+  return resolveLayoutTheme(osTheme ?? readBootstrapThemeColors())
 }
 
 function useApplyLayoutSystemTheme(colors: LayoutTheme) {
@@ -420,6 +413,7 @@ function TabImpl({
   headerShown: navigatorHeaderShown = true,
   tabBarShown = true,
   appShellBackgroundColor,
+  contentBackgroundColor: navigatorContentBackground,
   safeAreaEdges,
   tabBarOptions,
 }: TabBaseProps) {
@@ -481,10 +475,16 @@ function TabImpl({
   )
 
   const title = merged.title ?? ''
+  const shellBg =
+    appShellBackgroundColor ??
+    pickContentBackgroundColor(merged) ??
+    (typeof navigatorContentBackground === 'string' && navigatorContentBackground.trim().length > 0
+      ? navigatorContentBackground.trim()
+      : undefined) ??
+    colors.background
   const barBg =
     (typeof merged.headerBackground === 'string' && merged.headerBackground) || colors.surface
   const showAppBar = navigatorHeaderShown && merged.headerShown !== false
-  const shellBg = appShellBackgroundColor ?? colors.surface
 
   // Tab routes are always JS-swapped within the same bundle. Never native push.
   const tabs: TabItem[] = useMemo(() => {

@@ -12,6 +12,7 @@ import {
 } from '@lynx-js/react'
 import { MemoryRouter, useLocation, useNavigate, useNavigationType, resolvePath } from 'react-router'
 import { readHydratedStateJson, TamerNav } from '@tamer4lynx/tamer-navigation'
+import { useThemeColors } from '@tamer4lynx/tamer-system-ui'
 import { BackHandlerProvider } from './back-handler.js'
 import { parseCoordinatorNavDispatchPayload } from './coordinator-dispatch.js'
 import { TAMER_LAZY_ROUTES } from '@tamer4lynx/tamer-router/generated-lazy-flag'
@@ -153,6 +154,7 @@ function TamerNavigateContext({
   const navType = useNavigationType()
   const stackDepth = useRef(1)
   const pushCounter = useRef(0)
+  const themeColors = useThemeColors()
 
   useEffect(() => {
     if (navType === 'PUSH') {
@@ -162,19 +164,23 @@ function TamerNavigateContext({
     }
   }, [navType, loc.key, loc.pathname])
 
-  const coordinatorPush = useCallback(
+  const nativePush = useCallback(
     (to: string, replace: boolean) => {
       'background only'
       const stateJson = readActiveTamerStateJson(readHydratedStateJson('{}'))
       const screenId = `${to}-${pushCounter.current++}`
+      const bg = themeColors?.background?.trim()
+      const globalProps =
+        bg != null && bg.length > 0 ? { contentBackgroundColor: bg } : undefined
       TamerNav.push({
         src: bundleSrc,
         screenId,
         initData: { route: to, screenId, replace },
         stateJson,
+        globalProps,
       })
     },
-    [bundleSrc],
+    [bundleSrc, themeColors],
   )
 
   const go = useCallback(
@@ -182,11 +188,15 @@ function TamerNavigateContext({
       'background only'
       const from = loc.pathname
       let toPathname: string
+      let nativeRoute: string
       try {
-        toPathname = resolvePath(to, from).pathname
+        const resolved = resolvePath(to, from)
+        toPathname = resolved.pathname
+        nativeRoute = `${resolved.pathname}${resolved.search}${resolved.hash}`
       } catch {
         const t = String(to).trim()
         toPathname = !t || t === '/' ? '/' : t.startsWith('/') ? t : `/${t}`
+        nativeRoute = toPathname
       }
       let useReplace = replace
       if (!useReplace && shouldCoerceTabReplace(from, toPathname)) {
@@ -200,11 +210,7 @@ function TamerNavigateContext({
           spokeRootStack,
         })
       ) {
-        if (spokeMode) {
-          TamerNav.dispatch({ type: 'push-route', route: to, replace: useReplace })
-        } else {
-          coordinatorPush(to, useReplace)
-        }
+        nativePush(nativeRoute, useReplace)
         return
       }
       if (useReplace) {
@@ -213,7 +219,7 @@ function TamerNavigateContext({
         rawNavigate(to)
       }
     },
-    [coordinatorPush, loc.pathname, rawNavigate, spokeMode, spokeRootStack],
+    [nativePush, loc.pathname, rawNavigate, spokeMode, spokeRootStack],
   )
 
   const tamerNavigate = useCallback(
@@ -274,9 +280,9 @@ function TamerNavigateContext({
       back,
       canGoBack,
       navigate: tamerNavigate,
-      coordinatorPush,
+      coordinatorPush: nativePush,
     }),
-    [push, replace, back, canGoBack, tamerNavigate, coordinatorPush],
+    [push, replace, back, canGoBack, tamerNavigate, nativePush],
   )
 
   return (
@@ -293,7 +299,7 @@ function TamerNavigateContext({
         {!spokeMode ? (
           <CoordinatorNavDispatchListener
             onNavDispatch={shellRef.current.onNavDispatch}
-            onPushRoute={(to, replace) => coordinatorPush(to, replace)}
+            onPushRoute={(to, replace) => nativePush(to, replace)}
           />
         ) : null}
         <TamerBackHandlerWithNav shellRef={shellRef}>
