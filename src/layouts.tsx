@@ -14,6 +14,7 @@ const StackOptionsContext = createContext<{
   setRuntime: (name: string, o: Partial<ScreenOptions> | null) => void
   setSlot: (name: string, slot: ReactNode | null) => void
   unregister: (name: string) => void
+  pathPrefix: string
 } | null>(null)
 
 const TabOptionsContext = createContext<{
@@ -67,31 +68,47 @@ export function StackScreen({
   options = {},
   children,
 }: {
-  name: string
+  name?: string
   options?: ScreenOptions
   children?: ReactNode
 }) {
   const r = useContext(StackOptionsContext)
-  useEffect(() => {
-    r?.register(name, options)
-  }, [r, name, options])
+  const { pathname } = useLocation()
+  const resolvedName = useMemo(
+    () => name ?? pathToStackName(pathname, r?.pathPrefix ?? '/'),
+    [name, pathname, r?.pathPrefix],
+  )
 
   useEffect(() => {
-    return () => {
-      r?.unregister(name)
+    if (!r || !resolvedName) return
+    if (name == null) {
+      r.setRuntime(resolvedName, options)
+      return () => {
+        r.setRuntime(resolvedName, null)
+      }
     }
-  }, [r, name])
+    r.register(resolvedName, options)
+    return undefined
+  }, [r, name, resolvedName, options])
 
   useEffect(() => {
+    if (!r || name == null || !resolvedName) return
+    return () => {
+      r.unregister(resolvedName)
+    }
+  }, [r, name, resolvedName])
+
+  useEffect(() => {
+    if (!r || !resolvedName || name == null) return
     if (children == null) {
-      r?.setSlot(name, null)
+      r.setSlot(resolvedName, null)
       return
     }
-    r?.setSlot(name, children)
+    r.setSlot(resolvedName, children)
     return () => {
-      r?.setSlot(name, null)
+      r.setSlot(resolvedName, null)
     }
-  }, [r, name, children])
+  }, [r, name, resolvedName, children])
 
   return null
 }
@@ -114,15 +131,35 @@ function stackScreenKeyForFrame(
 ): string {
   const key = pathToStackName(pathname, pathPrefix)
   if (optionMap.has(key)) return key
+  for (const optionKey of optionMap.keys()) {
+    if (dynamicRouteSegmentMatches(optionKey, key)) return optionKey
+  }
   return 'index'
 }
 
+function dynamicRouteSegmentMatches(pattern: string, actual: string): boolean {
+  return (
+    pattern.length > 2 &&
+    pattern.startsWith('[') &&
+    pattern.endsWith(']') &&
+    actual.length > 0
+  )
+}
+
 function mergedScreenOptions(
+  layoutScreenOptions: ScreenOptions | undefined,
   nameKey: string,
+  runtimeKey: string,
   optionMap: Map<string, ScreenOptions>,
   runtime: Map<string, Partial<ScreenOptions>>,
 ): ScreenOptions {
-  return { ...optionMap.get('index'), ...optionMap.get(nameKey), ...runtime.get(nameKey) } as ScreenOptions
+  return {
+    ...layoutScreenOptions,
+    ...optionMap.get('index'),
+    ...optionMap.get(nameKey),
+    ...runtime.get(nameKey),
+    ...runtime.get(runtimeKey),
+  } as ScreenOptions
 }
 
 function mergedTabScreenOptions(
@@ -141,12 +178,13 @@ function mergedTabScreenOptions(
 
 type StackFrameProps = {
   pathPrefix: string
+  screenOptions?: ScreenOptions
   options: Map<string, ScreenOptions>
   runtime: Map<string, Partial<ScreenOptions>>
   slots: Map<string, ReactNode>
 }
 
-function StackFrame({ pathPrefix, options, runtime, slots }: StackFrameProps) {
+function StackFrame({ pathPrefix, screenOptions, options, runtime, slots }: StackFrameProps) {
   const { pathname } = useLocation()
   const { back, canGoBack, replace } = useTamerRouter()
   const colors = useRouterLayoutTheme()
@@ -155,9 +193,13 @@ function StackFrame({ pathPrefix, options, runtime, slots }: StackFrameProps) {
     () => stackScreenKeyForFrame(options, pathname, pathPrefix),
     [pathname, options, pathPrefix],
   )
+  const runtimeKey = useMemo(
+    () => pathToStackName(pathname, pathPrefix),
+    [pathname, pathPrefix],
+  )
   const merged = useMemo(
-    () => mergedScreenOptions(nameKey, options, runtime),
-    [nameKey, options, runtime],
+    () => mergedScreenOptions(screenOptions, nameKey, runtimeKey, options, runtime),
+    [screenOptions, nameKey, runtimeKey, options, runtime],
   )
   const title = merged.title ?? ''
   const barBg =
@@ -206,16 +248,24 @@ function StackFrame({ pathPrefix, options, runtime, slots }: StackFrameProps) {
   )
 }
 
-type StackProps = { pathPrefix: string; children: ReactNode }
+type StackProps = { pathPrefix: string; children: ReactNode; screenOptions?: ScreenOptions }
 
 /**
  * Stack routes render one app shell around the current stack screen. Native stack pushes create
  * separate JS contexts, while nested stack routes still resolve their active screen from the path.
  */
-function StackImpl({ pathPrefix, children }: StackProps) {
+function StackImpl({ pathPrefix, children, screenOptions }: StackProps) {
+  const parentStack = useContext(StackOptionsContext)
   const [options, setOptions] = useState(() => new Map<string, ScreenOptions>())
   const [runtime, setRuntimeMap] = useState(() => new Map<string, Partial<ScreenOptions>>())
   const [slots, setSlots] = useState(() => new Map<string, ReactNode>())
+  const effectiveScreenOptions = useMemo(
+    () => ({
+      ...(parentStack ? { headerShown: false } : null),
+      ...screenOptions,
+    } as ScreenOptions),
+    [parentStack, screenOptions],
+  )
 
   const register = useCallback((name: string, o: ScreenOptions) => {
     setOptions((prev) => {
@@ -257,14 +307,20 @@ function StackImpl({ pathPrefix, children }: StackProps) {
   }, [])
 
   const value = useMemo(
-    () => ({ register, setRuntime, setSlot, unregister }),
-    [register, setRuntime, setSlot, unregister],
+    () => ({ register, setRuntime, setSlot, unregister, pathPrefix }),
+    [register, setRuntime, setSlot, unregister, pathPrefix],
   )
 
   return (
     <StackOptionsContext.Provider value={value}>
       {children as any}
-      <StackFrame pathPrefix={pathPrefix} options={options} runtime={runtime} slots={slots} />
+      <StackFrame
+        pathPrefix={pathPrefix}
+        screenOptions={effectiveScreenOptions}
+        options={options}
+        runtime={runtime}
+        slots={slots}
+      />
     </StackOptionsContext.Provider>
   )
 }
@@ -535,7 +591,11 @@ export function Tabs({ pathPrefix, children, ...tabNavigatorRest }: TabsProps) {
 export function useScreenOptions(partial: Partial<ScreenOptions>) {
   const r = useContext(StackOptionsContext)
   const { pathname } = useLocation()
-  const nameKey = pathToStackName(pathname, '/')
+  const pathPrefix = r?.pathPrefix ?? '/'
+  const nameKey = useMemo(
+    () => pathToStackName(pathname, pathPrefix),
+    [pathname, pathPrefix],
+  )
   const patchKey = useMemo(() => JSON.stringify(partial), [partial])
 
   useEffect(() => {
