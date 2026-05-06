@@ -58,3 +58,4 @@ export { setTamerGeneratedRoutes, getTamerGeneratedRoutes } from './generated-ro
 export type { TamerOutermostStack, TamerFileRouterContextValue, ScreenOptions } from './types.js'
 export { Outlet, Slot, Stack, StackScreen, Tab, Tabs, TabScreen } from './layouts.js'
 export { useLocalSearchParams, useSegments, getOutermostStackId } from './tamer-routing-hooks.js'
+export * from './connectors/index.js'

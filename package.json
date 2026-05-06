@@ -1,6 +1,6 @@
 {
   "name": "@tamer4lynx/tamer-router",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "publishConfig": { "access": "public", "tag": "prerelease" },
   "type": "module",
   "description": "Lynx routing with `react-router@6` (MemoryRouter, TamerNav integration, Stack/Tab shells).",

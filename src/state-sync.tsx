@@ -37,10 +37,10 @@ function parseAggregateStateJson(json: string, syncs: TamerStateSync[]): void {
     return
   }
   for (const s of syncs) {
+    if (!(s.key in parsed)) continue
     const slice = parsed[s.key]
-    if (typeof slice === 'object' && slice !== null) {
-      s.hydrate(JSON.stringify(slice))
-    }
+    if (slice === undefined) continue
+    s.hydrate(JSON.stringify(slice))
   }
 }
 
