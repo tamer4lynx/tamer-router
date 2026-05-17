@@ -1,6 +1,6 @@
 {
   "name": "@tamer4lynx/tamer-router",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "publishConfig": { "access": "public", "tag": "prerelease" },
   "type": "module",
   "description": "Lynx routing with `react-router@6` (MemoryRouter, TamerNav integration, Stack/Tab shells).",
@@ -72,7 +72,7 @@
     "@rsbuild/core": "^1.3.0",
     "chokidar": "^4.0.0",
     "@tamer4lynx/tamer-app-shell": "^0.0.5",
-    "@tamer4lynx/tamer-system-ui": "^0.0.3",
+    "@tamer4lynx/tamer-system-ui": "^0.0.4",
     "url-search-params-polyfill": "^8.2.5"
   },
   "devDependencies": {
